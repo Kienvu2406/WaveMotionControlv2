@@ -41,7 +41,9 @@ public partial class AutoPage : UserControl
     private (int Row, int Column)? _selectedCell;
     private bool _autoRunning;
     private bool _paused;
-
+    private CancellationTokenSource? _autoStartCts;
+    private Task? _autoStartTask;
+    private bool _autoStopInProgress;
 
     private sealed class DesignerDependencies
     {
@@ -1175,57 +1177,178 @@ public partial class AutoPage : UserControl
 
     private async Task StartAutoAsync()
     {
+        // Không cho START khi STOP đang xử lý.
+        if (_autoStopInProgress)
+        {
+            _state.WriteLog(
+                LogLevel.Warning,
+                "AUTO đang STOP; hãy chờ STOP hoàn tất.");
+            return;
+        }
+
+        // Không cho chạy thêm một START khác khi START cũ vẫn còn sống.
+        if (_autoStartTask is { IsCompleted: false })
+        {
+            _state.WriteLog(
+                LogLevel.Warning,
+                "AUTO đang trong quá trình STARTING...");
+            return;
+        }
+
         if (_autoRunning)
         {
-            _state.WriteLog(LogLevel.Warning, "AUTO đang chạy; hãy STOP trước khi START lại.");
+            _state.WriteLog(
+                LogLevel.Warning,
+                "AUTO đang chạy; hãy STOP trước khi START lại.");
             return;
         }
 
         var program = TryBuildProgram();
+
         if (program is null)
         {
             _autoState.Text = "INVALID";
             _autoState.ForeColor = UiTheme.Error;
-            _state.WriteLog(LogLevel.Error, "AUTO START: chưa tạo cụm.");
+
+            _state.WriteLog(
+                LogLevel.Error,
+                "AUTO START: chưa tạo cụm.");
+
             return;
         }
 
         var readiness = GetAutoReadiness();
+
         if (!readiness.Ready)
         {
             _autoState.Text = "NOT READY";
             _autoState.ForeColor = UiTheme.Warning;
-            _state.WriteLog(LogLevel.Error, $"AUTO START bị khóa: {readiness.Message}.");
-            MessageBox.Show(this,
-                $"Chưa thể chạy AUTO.\n\n{readiness.Message}\n\n" +
-                "Mỗi cụm phải đủ Driver ID, 100% Online và đã HOME hoặc lấy vị trí hiện tại làm gốc.",
+
+            _state.WriteLog(
+                LogLevel.Error,
+                $"AUTO START bị khóa: {readiness.Message}.");
+
+            MessageBox.Show(
+                this,
+                $"Chưa thể chạy AUTO.\n\n" +
+                $"{readiness.Message}\n\n" +
+                "Mỗi cụm phải đủ Driver ID, 100% Online và đã HOME " +
+                "hoặc lấy vị trí hiện tại làm gốc.",
                 "AUTO chưa sẵn sàng",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
+
             return;
         }
 
+        // ============================================================
+        // TẠO TOKEN RIÊNG CHO LẦN START NÀY
+        // ============================================================
+
+        var startCts = new CancellationTokenSource();
+
+        _autoStartCts = startCts;
+
         _autoRunning = true;
         _paused = false;
+
         _preview.ResetTime();
         _preview.Running = true;
         _preview.Paused = false;
+
         _autoState.Text = "STARTING...";
         _autoState.ForeColor = UiTheme.Accent;
+
+        Task? startTask = null;
+
         try
         {
-            await _service.StartAutoAsync(program);
+            // QUAN TRỌNG:
+            // Truyền CancellationToken xuống service.
+            startTask = _service.StartAutoAsync(
+                program,
+                startCts.Token);
+
+            _autoStartTask = startTask;
+
+            // Đợi toàn bộ:
+            // PRE-PHASE
+            // → WAIT POSITION
+            // → CONFIG 16PR
+            // → TRIGGER START
+            await startTask;
+
+            // STOP có thể vừa được nhấn đúng lúc service hoàn tất.
+            // Không được đổi trạng thái trở lại RUNNING.
+            if (startCts.IsCancellationRequested ||
+                _autoStopInProgress)
+            {
+                return;
+            }
+
             _autoState.Text = "RUNNING";
             _autoState.ForeColor = UiTheme.Online;
+        }
+        catch (OperationCanceledException)
+            when (startCts.IsCancellationRequested)
+        {
+            // Đây là trường hợp người dùng bấm STOP trong lúc STARTING.
+            // Không coi đây là ERROR.
+
+            _state.WriteLog(
+                LogLevel.Warning,
+                "AUTO START đã bị hủy bởi STOP.");
+
+            _autoRunning = false;
+            _paused = false;
+
+            _preview.Running = false;
+            _preview.Paused = false;
+
+            // Không ghi STOPPED ở đây.
+            // StopAutoAsync() sẽ quyết định trạng thái cuối cùng.
         }
         catch (Exception ex)
         {
             _autoRunning = false;
+            _paused = false;
+
             _preview.Running = false;
-            _autoState.Text = "ERROR";
-            _autoState.ForeColor = UiTheme.Error;
-            _state.WriteLog(LogLevel.Error, $"AUTO START lỗi: {ex.Message}");
-            MessageBox.Show(this, ex.Message, "AUTO START", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _preview.Paused = false;
+
+            // Nếu STOP đang diễn ra thì không bật popup ERROR
+            // gây khó chịu cho người vận hành.
+            if (!_autoStopInProgress)
+            {
+                _autoState.Text = "ERROR";
+                _autoState.ForeColor = UiTheme.Error;
+
+                _state.WriteLog(
+                    LogLevel.Error,
+                    $"AUTO START lỗi: {ex.Message}");
+
+                MessageBox.Show(
+                    this,
+                    ex.Message,
+                    "AUTO START",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+        finally
+        {
+            // Chỉ xóa nếu đây vẫn là lần START hiện tại.
+            if (ReferenceEquals(_autoStartTask, startTask))
+            {
+                _autoStartTask = null;
+            }
+
+            if (ReferenceEquals(_autoStartCts, startCts))
+            {
+                _autoStartCts = null;
+            }
+
+            startCts.Dispose();
         }
     }
 
@@ -1244,14 +1367,110 @@ public partial class AutoPage : UserControl
 
     private async Task StopAutoAsync(bool quick)
     {
-        _autoRunning = false;
-        _paused = false;
-        _preview.Paused = false;
-        _preview.Running = false;
-        _autoState.Text = quick ? "QUICK STOP" : "STOPPED";
-        _autoState.ForeColor = quick ? UiTheme.Error : UiTheme.Warning;
-        await _service.StopAllAsync(quick);
-        RefreshAutoReadiness();
+       
+        if (_autoStopInProgress)
+        {
+            return;
+        }
+
+        _autoStopInProgress = true;
+
+        try
+        {
+            _autoState.Text =
+                quick ? "QUICK STOPPING..." : "STOPPING...";
+
+            _autoState.ForeColor =
+                quick ? UiTheme.Error : UiTheme.Warning;
+
+            _paused = false;
+
+            _preview.Paused = false;
+            _preview.Running = false;
+
+         
+            var startCts = _autoStartCts;
+            var startTask = _autoStartTask;
+
+            if (startCts is not null &&
+                !startCts.IsCancellationRequested)
+            {
+                startCts.Cancel();
+
+                _state.WriteLog(
+                    LogLevel.Warning,
+                    "AUTO STOP: đang hủy quá trình START...");
+            }
+
+  
+
+            if (startTask is not null &&
+                !startTask.IsCompleted)
+            {
+                try
+                {
+                    await startTask;
+                }
+                catch (OperationCanceledException)
+                {
+                
+                }
+                catch (Exception ex)
+                {
+                   
+                    _state.WriteLog(
+                        LogLevel.Warning,
+                        $"AUTO STOP: task START kết thúc với lỗi: {ex.Message}");
+                }
+            }
+
+
+            _autoRunning = false;
+            _paused = false;
+
+            
+            await _service.StopAllAsync(quick);
+
+            _autoState.Text =
+                quick ? "QUICK STOP" : "STOPPED";
+
+            _autoState.ForeColor =
+                quick ? UiTheme.Error : UiTheme.Warning;
+
+            _state.WriteLog(
+                LogLevel.Ok,
+                quick
+                    ? "AUTO QUICK STOP hoàn tất."
+                    : "AUTO STOP hoàn tất.");
+        }
+        catch (Exception ex)
+        {
+            _autoRunning = false;
+            _paused = false;
+
+            _preview.Running = false;
+            _preview.Paused = false;
+
+            _autoState.Text = "STOP ERROR";
+            _autoState.ForeColor = UiTheme.Error;
+
+            _state.WriteLog(
+                LogLevel.Error,
+                $"AUTO STOP lỗi: {ex.Message}");
+
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "AUTO STOP",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _autoStopInProgress = false;
+
+            RefreshAutoReadiness();
+        }
     }
 
 
@@ -1378,5 +1597,10 @@ public partial class AutoPage : UserControl
     {
         if (IsDisposed || !IsHandleCreated) return;
         try { BeginInvoke(action); } catch { }
+    }
+
+    private void AutoPage_Load_1(object sender, EventArgs e)
+    {
+
     }
 }

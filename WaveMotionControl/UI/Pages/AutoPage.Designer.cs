@@ -26,6 +26,7 @@ public partial class AutoPage
         BackColor = Color.FromArgb(11, 15, 25);
         Name = "AutoPage";
         Size = new Size(1357, 620);
+        Load += AutoPage_Load_1;
         ResumeLayout(false);
     }
 }
