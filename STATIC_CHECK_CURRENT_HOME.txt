@@ -1,0 +1,16 @@
+STATIC CHECK - UNIFORM 16 PR CURRENT + MECHANICAL HOME
+
+Changes verified by source inspection:
+- ManualPage has a separate Peak-current input for the 16-PR test: 0.5 to 4.0 A.
+- UniformSliderMotionSettings carries PeakCurrentAmps.
+- Em2RsModbusService writes the requested current to 0x0191 and reads it back before START.
+- Current is not saved to EEPROM by the 16-PR test.
+- ManualPage displays the calculated mechanical-home angle.
+- A confirmation button can set the current driver position to 0 pulse.
+- The zero command writes 0x0021 to 0x6002 and verifies 0x602C/0x602D.
+- All edited C# files have balanced braces, parentheses and brackets.
+- Only one Em2RsModbusService implementation is present.
+
+Not performed:
+- .NET build was not run because dotnet/MSBuild is unavailable in this environment.
+- No hardware validation was performed on an EM2RS driver.

@@ -1,0 +1,37 @@
+STATIC CHECK AUTO REV1
+Generated UTC: 2026-08-11 02:59:27
+
+[1] IRs485Service implementers:
+/mnt/data/WaveMotionControl_AUTO_work/WaveMotionControl_Uniform16PR_Current_Home_v2/WaveMotionControl_WinForms_fixed_net9_v3/WaveMotionControl/Services/Em2RsModbusService.cs:26:public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsService, IUniformSliderMotionService, IDisposable
+/mnt/data/WaveMotionControl_AUTO_work/WaveMotionControl_Uniform16PR_Current_Home_v2/WaveMotionControl_WinForms_fixed_net9_v3/WaveMotionControl/Services/DemoRs485Service.cs:10:public sealed class DemoRs485Service : IRs485Service, IModeDriverSettingsService
+
+[2] Current-origin implementations:
+/mnt/data/WaveMotionControl_AUTO_work/WaveMotionControl_Uniform16PR_Current_Home_v2/WaveMotionControl_WinForms_fixed_net9_v3/WaveMotionControl/Services/Em2RsModbusService.cs:1429:    public async Task SetCurrentPositionAsOriginAsync(
+/mnt/data/WaveMotionControl_AUTO_work/WaveMotionControl_Uniform16PR_Current_Home_v2/WaveMotionControl_WinForms_fixed_net9_v3/WaveMotionControl/Services/IRs485Service.cs:16:    Task SetCurrentPositionAsOriginAsync(IEnumerable<AxisAddress> axes, CancellationToken cancellationToken = default);
+/mnt/data/WaveMotionControl_AUTO_work/WaveMotionControl_Uniform16PR_Current_Home_v2/WaveMotionControl_WinForms_fixed_net9_v3/WaveMotionControl/Services/DemoRs485Service.cs:97:    public Task SetCurrentPositionAsOriginAsync(IEnumerable<AxisAddress> axes, CancellationToken cancellationToken = default)
+
+[3] AUTO constant-speed loop markers:
+1562:                        await PrepareConstantSpeedAutoLoopAsync(profile, cancellationToken)
+1589:    private async Task PrepareConstantSpeedAutoLoopAsync(
+1706:                    await TriggerAutoProfilesAsync(due, cancellationToken).ConfigureAwait(false);
+1718:                        axis.LastCommand = $"AUTO_CONST_C{profile.ClusterId}_L{profile.LayerIndex}";
+1737:    private async Task TriggerAutoProfilesAsync(
+1798:        await TriggerAutoProfilesAsync(resumeProfiles, cancellationToken).ConfigureAwait(false);
+
+[4] Old streamed AUTO target method should be absent:
+PASS: SendAutoTargetsAsync absent
+
+[5] UI speed/origin/readiness markers:
+288:        effect.Controls.Add(LabeledControl("Tốc độ motor (vòng/s)", _frequency), 0, 3);
+395:        status.Controls.Add(ValueCard("Điều kiện START", _readinessInfo), 0, 1);
+445:        var origin = UiTheme.Button("LẤY VỊ TRÍ HIỆN TẠI = GỐC");
+
+[6] Brace balance (naive):
+UI/Pages/AutoPage.cs: brace_delta=0, lines=1138
+Services/Em2RsModbusService.cs: brace_delta=0, lines=4892
+Services/DemoRs485Service.cs: brace_delta=0, lines=374
+Models/AutoProgram.cs: brace_delta=0, lines=92
+Services/IRs485Service.cs: brace_delta=0, lines=28
+
+[7] Build status:
+NOT RUN: dotnet SDK is not installed in this environment.

@@ -1,0 +1,22 @@
+STATIC CHECK — 2026-08-07
+
+OK: WaveMotionControl.sln tồn tại.
+OK: Target net9.0-windows.
+OK: Program.cs khởi tạo Em2RsModbusService thật.
+OK: ManualPage có panel TEST CON TRƯỢT GẦN ĐỀU — 16 PR.
+OK: Có nút GHI 16 PR + START LOOP.
+OK: Có Models/UniformSliderMotion.cs.
+OK: Có Services/IUniformSliderMotionService.cs.
+OK: Em2RsModbusService triển khai IUniformSliderMotionService.
+OK: Ghi PR0..PR15 theo bước 8 thanh ghi.
+OK: PR15 Jump về PR0.
+OK: OVLP bit5 được bật để nối tốc độ giữa các PR.
+OK: Readback kiểm tra PR0 và PR15 trước khi START.
+OK: Pulse/vòng lấy từ SETTING.
+OK: Dòng chạy lấy từ profile MANUAL, giới hạn tối đa 4,0 A.
+OK: Không đóng gói .vs/bin/obj cũ.
+OK: Kiểm tra cân bằng {}, (), [] trên toàn bộ mã nguồn.
+OK: Không còn catch ObjectDisposedException nằm sau InvalidOperationException.
+
+CHƯA KIỂM TRA: Rebuild bằng compiler .NET vì môi trường xử lý không có dotnet SDK.
+CHƯA KIỂM TRA: Chạy thật trên driver/motor. Cần thử một driver ở tốc độ thấp và E-stop phần cứng sẵn sàng.

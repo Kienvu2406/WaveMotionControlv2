@@ -1,0 +1,13 @@
+AUTO REV2 - UI layout correction
+
+Cause of REV1 failure:
+- Left/right scroll panels contained AutoSize TableLayoutPanel controls docked Top.
+- Under real WinForms DPI/docking, preferred-size negotiation could collapse the AUTO page layout into a small region at top-left.
+
+Fix:
+- Root remains 3-column Dock=Fill: 310px | flexible grid | 310px.
+- Center 16x16 grid always uses the flexible Fill column.
+- Left/right sidebars remain independently scrollable.
+- Sidebar content uses explicit heights and fixed TableLayoutPanel rows; AutoSize is NOT used.
+- All primary buttons/inputs are Dock=Fill within rows sized for DPI scaling.
+- AUTO REV1 motion logic is unchanged.

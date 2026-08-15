@@ -1,0 +1,14 @@
+AUTO revision implemented from user requirements
+
+1. Wave layers changed from Euclidean distance groups to concentric rectangular rings.
+2. AUTO no longer streams increasing absolute PR0 targets every ~120 ms.
+3. Each driver gets a local 16-segment equal-angle PR loop with constant RPM; this is NOT slider-crank compensation.
+4. Motor speed is configured per cluster in rev/s and displayed with RPM equivalent.
+5. START requires every cell assigned, every driver Online, and every driver at phase 0 (HOME/current-origin).
+6. Added batch current-position-as-origin API and AUTO UI button for selected cluster.
+7. Pause freezes scheduler time; resume retriggers already-started layers and continues pending layer timing.
+8. STOP does not HOME.
+9. Left/right AUTO sidebars use independent scrolling and larger content sizing to prevent overlapping controls.
+10. AUTO UI shows readiness and driver state colors.
+
+Not compiled in this environment: dotnet SDK unavailable.

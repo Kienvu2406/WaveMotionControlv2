@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wave Motion Control — Interactive HMI Web Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --surface: #111827;
+      --surface-alt: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #00d2ff;
+      --accent-dark: #0284c7;
+      --online: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --homed: #38bdf8;
+      --font-main: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      height: 70px;
+      background-color: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 390px 490px 1fr;
+      align-items: center;
+      padding: 0 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-logo {
+      width: 48px;
+      height: 48px;
+      background: var(--accent-dark);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.4rem;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(0, 210, 255, 0.35);
+    }
+
+    .brand-text h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .brand-text p {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    nav {
+      display: flex;
+      gap: 10px;
+    }
+
+    .nav-btn {
+      width: 110px;
+      height: 40px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .nav-btn.active {
+      background: var(--accent-dark);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 14px rgba(0, 210, 255, 0.4);
+    }
+
+    .header-status {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .status-badge {
+      padding: 8px 18px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: var(--online);
+    }
+
+    .clock {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      text-align: right;
+      color: var(--text);
+      line-height: 1.3;
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      padding: 12px;
+      display: relative;
+      overflow: hidden;
+    }
+
+    .page {
+      display: none;
+      height: 100%;
+      width: 100%;
+    }
+
+    .page.active {
+      display: grid;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .card-subtitle {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* Buttons & Inputs */
+    .btn {
+      height: 36px;
+      padding: 0 14px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .btn:hover {
+      background: #2f3844;
+    }
+
+    .btn-primary {
+      background: var(--accent-dark);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent); }
+
+    .btn-danger {
+      border-color: var(--error);
+      color: var(--error);
+    }
+    .btn-danger:hover { background: rgba(235,83,83,0.15); }
+
+    input, select {
+      height: 34px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 0 10px;
+      font-family: var(--font-main);
+      font-size: 0.85rem;
+      outline: none;
+    }
+
+    .metric-box {
+      background: var(--surface-alt);
+      border-radius: 6px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .metric-label {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .metric-val {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-top: 4px;
+      font-family: var(--font-mono);
+    }
+
+    /* PAGE 1: MAIN */
+    #page-main {
+      grid-template-columns: 370px 1fr 400px;
+      gap: 12px;
+    }
+
+    .connection-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .line-row {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 46px 1fr 130px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .line-badge {
+      background: var(--bg);
+      height: 100%;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.1rem;
+    }
+
+    .driver-grid-container {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      background: var(--surface-alt);
+      padding: 6px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      height: 100%;
+    }
+
+    .driver-row {
+      display: grid;
+      grid-template-columns: 46px repeat(16, 1fr);
+      gap: 3px;
+      flex: 1;
+    }
+
+    .row-tag {
+      background: var(--bg);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .axis-cell {
+      background: #1c2f2b;
+      border: 1px solid var(--online);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .axis-cell:hover { transform: scale(1.05); }
+    .axis-cell.selected { border: 2px solid var(--accent); }
+
+    /* PAGE 2: MANUAL */
+    #page-manual {
+      grid-template-columns: 370px 1fr 400px;
+      gap: 12px;
+    }
+
+    .jog-container {
+      display: grid;
+      grid-template-columns: 1fr 140px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    .jog-btn {
+      height: 110px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 1.1rem;
+    }
+
+    .jog-btn:active {
+      background: #2a3746;
+      border-color: var(--accent);
+    }
+
+    /* PAGE 3: AUTO */
+    #page-auto {
+      grid-template-columns: 350px 1fr 390px;
+      gap: 12px;
+    }
+
+    .canvas-container {
+      background: #14191f;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      flex: 1;
+      position: relative;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* PAGE 4: STATUS */
+    #page-status {
+      grid-template-rows: 90px 1fr 30px;
+      gap: 12px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    th, td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      background: var(--surface-alt);
+      font-weight: 600;
+    }
+
+    /* Log Box */
+    .log-box {
+      background: #14191f;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      padding: 8px;
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .log-entry { color: var(--muted); }
+    .log-entry.ok { color: var(--online); }
+    .log-entry.warn { color: var(--warning); }
+    .log-entry.error { color: var(--error); }
+
+    /* Footer */
+    footer {
+      height: 32px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    /* Control Panel Drawer for Tweak */
+    .tweak-toolbar {
+      position: fixed;
+      bottom: 40px;
+      right: 20px;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 12px 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      z-index: 1000;
+    }
+
+    .tweak-title {
+      font-weight: 700;
+      color: var(--accent);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">64</div>
+      <div class="brand-text">
+        <h1>WAVE MOTION CONTROL</h1>
+        <p>4 line RS485 · 64 driver EM2RS</p>
+      </div>
+    </div>
+
+    <nav>
+      <button class="nav-btn active" onclick="switchPage('main', this)">MAIN</button>
+      <button class="nav-btn" onclick="switchPage('manual', this)">MANUAL</button>
+      <button class="nav-btn" onclick="switchPage('auto', this)">AUTO</button>
+      <button class="nav-btn" onclick="switchPage('status', this)">STATUS</button>
+    </nav>
+
+    <div class="header-status">
+      <div class="status-badge" id="system-status-badge">SYSTEM ONLINE</div>
+      <div class="clock" id="live-clock">15:30:00<br>30/07/2026</div>
+    </div>
+  </header>
+
+  <!-- MAIN AREA -->
+  <main>
+
+    <!-- PAGE 1: MAIN -->
+    <div id="page-main" class="page active">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">KẾT NỐI RS485</div>
+            <div class="card-subtitle">4 cổng COM độc lập, mỗi line 16 driver</div>
+          </div>
+        </div>
+
+        <div class="connection-list">
+          <div class="line-row">
+            <div class="line-badge">L1</div>
+            <div>
+              <select style="width:100%"><option>COM1</option></select>
+              <select style="width:100%; margin-top:4px"><option>115200</option></select>
+            </div>
+            <div>
+              <button class="btn btn-primary" style="width:100%">DISCONNECT</button>
+              <div style="font-size:0.75rem; color:var(--online); margin-top:4px">16/16 online</div>
+            </div>
+          </div>
+
+          <div class="line-row">
+            <div class="line-badge">L2</div>
+            <div>
+              <select style="width:100%"><option>COM2</option></select>
+              <select style="width:100%; margin-top:4px"><option>115200</option></select>
+            </div>
+            <div>
+              <button class="btn btn-primary" style="width:100%">DISCONNECT</button>
+              <div style="font-size:0.75rem; color:var(--online); margin-top:4px">16/16 online</div>
+            </div>
+          </div>
+
+          <div class="line-row">
+            <div class="line-badge">L3</div>
+            <div>
+              <select style="width:100%"><option>COM3</option></select>
+              <select style="width:100%; margin-top:4px"><option>115200</option></select>
+            </div>
+            <div>
+              <button class="btn btn-primary" style="width:100%">DISCONNECT</button>
+              <div style="font-size:0.75rem; color:var(--online); margin-top:4px">16/16 online</div>
+            </div>
+          </div>
+
+          <div class="line-row">
+            <div class="line-badge">L4</div>
+            <div>
+              <select style="width:100%"><option>COM4</option></select>
+              <select style="width:100%; margin-top:4px"><option>115200</option></select>
+            </div>
+            <div>
+              <button class="btn btn-primary" style="width:100%">DISCONNECT</button>
+              <div style="font-size:0.75rem; color:var(--online); margin-top:4px">16/16 online</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:auto">
+          <button class="btn btn-primary">CONNECT ALL</button>
+          <button class="btn">DISCONNECT</button>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px">
+          <div class="metric-box"><div class="metric-label">Line kết nối</div><div class="metric-val" style="color:var(--online)">4 / 4</div></div>
+          <div class="metric-box"><div class="metric-label">Driver Online</div><div class="metric-val" style="color:var(--online)">64 / 64</div></div>
+          <div class="metric-box"><div class="metric-label">Đã lấy gốc</div><div class="metric-val" style="color:var(--homed)">64 / 64</div></div>
+          <div class="metric-box"><div class="metric-label">Alarm</div><div class="metric-val">0</div></div>
+        </div>
+
+        <div class="card" style="flex:1">
+          <div class="card-title">TRẠNG THÁI 64 DRIVER</div>
+          <div class="driver-grid-container" id="main-grid">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <div class="card" style="height:120px">
+          <div class="card-title">ĐIỀU KHIỂN VỀ GỐC (GO HOME)</div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr 140px 100px; gap:10px; align-items:center">
+            <select><option>1.1</option></select>
+            <select><option>Tất cả 64 driver</option></select>
+            <button class="btn btn-primary">HOME START</button>
+            <button class="btn btn-danger">STOP</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">SYSTEM LOG</div>
+          <button class="btn" style="height:28px; font-size:0.75rem">CLEAR</button>
+        </div>
+        <div class="log-box" id="main-log">
+          <div class="log-entry ok">[15:30:01] OK Driver 1.1: HOME_OK.</div>
+          <div class="log-entry ok">[15:30:02] OK Line 1: tìm thấy 16/16 driver.</div>
+          <div class="log-entry">[15:30:03] INFO Hệ thống sẵn sàng hoạt động.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE 2: MANUAL -->
+    <div id="page-manual" class="page">
+      <div class="card">
+        <div class="card-title">CHỌN DRIVER</div>
+        <div style="display:flex; gap:8px">
+          <input type="text" value="1.1" style="flex:1; font-weight:700; font-size:1.1rem">
+          <button class="btn btn-primary">CHỌN</button>
+        </div>
+
+        <div style="background:var(--surface-alt); padding:12px; border-radius:6px; border:1px solid var(--border); margin-top:8px">
+          <div style="font-size:2rem; font-weight:700; color:var(--accent)">1.1</div>
+          <div style="font-size:0.8rem; color:var(--muted); margin-top:4px">Line 1 · Slave 1 · COM1<br>MOVING</div>
+        </div>
+
+        <div class="card-title" style="margin-top:10px">DANH SÁCH 64 DRIVER</div>
+        <div class="driver-grid-container" id="manual-grid">
+          <!-- Rendered by JS -->
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div class="card" style="flex:1">
+          <div class="card-title">JOG THỦ CÔNG</div>
+          <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px">
+            <div><label style="font-size:0.75rem; color:var(--muted)">Tốc độ JOG (rpm)</label><input type="number" value="60" style="width:100%"></div>
+            <div><label style="font-size:0.75rem; color:var(--muted)">Gia tốc</label><input type="number" value="200" style="width:100%"></div>
+            <div><label style="font-size:0.75rem; color:var(--muted)">Giảm tốc</label><input type="number" value="200" style="width:100%"></div>
+          </div>
+
+          <div class="jog-container">
+            <button class="jog-btn">◀ JOG LÙI<div style="font-size:0.75rem; color:var(--muted)">CCW / JOG−</div></button>
+            <div style="text-align:center; font-weight:700; color:var(--muted)">MOTOR<br>STOPPED</div>
+            <button class="jog-btn">JOG TIẾN ▶<div style="font-size:0.75rem; color:var(--muted)">CW / JOG+</div></button>
+          </div>
+        </div>
+
+        <div class="card" style="flex:1">
+          <div class="card-title">CHẠY THEO SỐ VÒNG</div>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px">
+            <div><label style="font-size:0.75rem; color:var(--muted)">Số vòng</label><input type="number" value="1.000" style="width:100%"></div>
+            <div><label style="font-size:0.75rem; color:var(--muted)">Chiều quay</label><select style="width:100%"><option>Tiến / CW</option></select></div>
+            <div><label style="font-size:0.75rem; color:var(--muted)">Tốc độ (rpm)</label><input type="number" value="200" style="width:100%"></div>
+            <div><label style="font-size:0.75rem; color:var(--muted)">Pulse / vòng</label><input type="number" value="10000" style="width:100%"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px">
+            <div class="metric-box"><div class="metric-label">Vị trí tương đối</div><div class="metric-val">10,000 p</div></div>
+            <div class="metric-box"><div class="metric-label">Position High</div><div class="metric-val">0x0000</div></div>
+            <div class="metric-box"><div class="metric-label">Position Low</div><div class="metric-val">0x2710</div></div>
+            <div class="metric-box"><div class="metric-label">Thời gian dự kiến</div><div class="metric-val">0.30 s</div></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px">
+            <button class="btn btn-primary">START MOVE</button>
+            <button class="btn btn-danger">QUICK STOP</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">MANUAL STATUS</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+          <div class="metric-box"><div class="metric-label">Driver</div><div class="metric-val">1.1</div></div>
+          <div class="metric-box"><div class="metric-label">Mode</div><div class="metric-val">POSITION</div></div>
+          <div class="metric-box"><div class="metric-label">Velocity</div><div class="metric-val">704 rpm</div></div>
+          <div class="metric-box"><div class="metric-label">Command</div><div class="metric-val">AUTO_SINE</div></div>
+        </div>
+
+        <div class="log-box" style="margin-top:10px">
+          <div class="log-entry ok">[15:31:00] OK MOVE_COMPLETE, vị trí 10 vòng.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE 3: AUTO -->
+    <div id="page-auto" class="page">
+      <div class="card">
+        <div class="card-title">CẤU HÌNH HÀNH TRÌNH</div>
+        <div style="display:flex; flex-direction:column; gap:8px">
+          <div><label style="font-size:0.75rem; color:var(--muted)">Số vòng quay tối đa từ Home</label><input type="number" value="20.08" style="width:100%"></div>
+          <div><label style="font-size:0.75rem; color:var(--muted)">Pulse trên một vòng</label><input type="number" value="10000" style="width:100%"></div>
+          <div><label style="font-size:0.75rem; color:var(--muted)">Bước vít me (mm/vòng)</label><input type="number" value="8.00" style="width:100%"></div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px">
+          <div class="metric-box"><div class="metric-label">Hành trình tối đa</div><div class="metric-val">160.64 mm</div></div>
+          <div class="metric-box"><div class="metric-label">Vị trí lớn nhất</div><div class="metric-val">200,800 p</div></div>
+          <div class="metric-box"><div class="metric-label">Tâm dao động</div><div class="metric-val">80.32 mm</div></div>
+          <div class="metric-box"><div class="metric-label">Biên độ mặc định</div><div class="metric-val">80.32 mm</div></div>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div class="card" style="height:180px">
+          <div class="card-title">CHIA DÃY VÀ CHỌN HIỆU ỨNG</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+            <div style="background:var(--surface-alt); padding:10px; border-radius:6px">
+              <div style="font-weight:700; color:var(--accent); font-size:0.85rem">DÃY 1 (21 trục)</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:6px">
+                <select><option>1.1</option></select>
+                <select><option>2.5</option></select>
+                <select><option>Xen kẽ</option></select>
+              </div>
+            </div>
+            <div style="background:var(--surface-alt); padding:10px; border-radius:6px">
+              <div style="font-weight:700; color:var(--warning); font-size:0.85rem">DÃY 2 (43 trục)</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:6px">
+                <select><option>2.6</option></select>
+                <select><option>4.16</option></select>
+                <select><option>Hình sin</option></select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="flex:1">
+          <div class="card-title">XEM TRƯỚC BỀ MẶT SÓNG (64 MOTOR REALTIME)</div>
+          <div class="canvas-container">
+            <canvas id="waveCanvas"></canvas>
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr repeat(4, 110px); gap:10px; align-items:center; margin-top:8px">
+            <div><label style="font-size:0.75rem; color:var(--muted)">Tăng biên độ (s)</label><input type="number" value="2.0" style="width:100%"></div>
+            <div><label style="font-size:0.75rem; color:var(--muted)">Giảm biên độ (s)</label><input type="number" value="5.0" style="width:100%"></div>
+            <button class="btn btn-primary">AUTO START</button>
+            <button class="btn">RESUME</button>
+            <button class="btn">RAMP STOP</button>
+            <button class="btn btn-danger">QUICK STOP</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">AUTO STATUS</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+          <div class="metric-box"><div class="metric-label">Tổng số trục</div><div class="metric-val">64 / 64</div></div>
+          <div class="metric-box"><div class="metric-label">Chu kỳ</div><div class="metric-val">25.00 s</div></div>
+          <div class="metric-box"><div class="metric-label">Vận tốc max</div><div class="metric-val">20.19 mm/s</div></div>
+          <div class="metric-box"><div class="metric-label">Gia tốc max</div><div class="metric-val">5.07 mm/s²</div></div>
+        </div>
+
+        <div class="card-title" style="margin-top:14px">KIỂM TRA VỊ TRÍ TRỤC</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+          <div class="metric-box"><div class="metric-label">Thuộc dãy</div><div class="metric-val">Dãy 1</div></div>
+          <div class="metric-box"><div class="metric-label">Vị trí hiện tại</div><div class="metric-val">0.12 vòng</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE 4: STATUS -->
+    <div id="page-status" class="page">
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px">
+        <div class="metric-box"><div class="metric-label">Driver Online</div><div class="metric-val" style="color:var(--online)">64 / 64</div></div>
+        <div class="metric-box"><div class="metric-label">Đã lấy gốc</div><div class="metric-val" style="color:var(--homed)">64 / 64</div></div>
+        <div class="metric-box"><div class="metric-label">Đang chuyển động</div><div class="metric-val" style="color:var(--warning)">64 / 64</div></div>
+        <div class="metric-box"><div class="metric-label">Trục báo lỗi (Alarm)</div><div class="metric-val">0</div></div>
+      </div>
+
+      <div class="card" style="overflow:hidden">
+        <div class="card-title">BẢNG GIÁM SÁT CHI TIẾT 64 DRIVER EM2RS</div>
+        <div style="overflow-y:auto; flex:1">
+          <table>
+            <thead>
+              <tr>
+                <th>Driver ID</th>
+                <th>Tuyến (Line)</th>
+                <th>Cổng COM</th>
+                <th>Trạng thái</th>
+                <th>Vị trí (vòng)</th>
+                <th>Vận tốc (rpm)</th>
+                <th>Lệnh gần nhất</th>
+              </tr>
+            </thead>
+            <tbody id="status-table-body">
+              <!-- Rendered by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="text-align:center; font-size:0.8rem; color:var(--muted)">Dữ liệu được cập nhật thời gian thực mỗi 200ms · 4 tuyến Modbus RTU (Line 1 → Line 4)</div>
+    </div>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer>
+    <div>Project: WAVE 4×16 · Modbus RTU · Thiết kế HMI 1920×1080</div>
+    <div id="footer-page-tag">MAIN screen</div>
+  </footer>
+
+  <!-- TWEAK TOOLBAR FOR LIVE UI CUSTOMIZATION -->
+  <div class="tweak-toolbar">
+    <div class="tweak-title">🛠️ BẢNG TINH CHỈNH DEMO TRỰC TIẾP:</div>
+    <label style="font-size:0.8rem">Độ rộng Cột Trái (px):
+      <input type="number" id="left-col-width" value="370" style="width:70px" onchange="adjustLeftCol(this.value)">
+    </label>
+    <label style="font-size:0.8rem">Độ rộng Nút Header (px):
+      <input type="number" id="nav-btn-width" value="110" style="width:70px" onchange="adjustNavBtn(this.value)">
+    </label>
+    <label style="font-size:0.8rem">Font Lưới Driver (pt):
+      <input type="number" id="grid-font-size" value="7.5" step="0.5" style="width:70px" onchange="adjustGridFont(this.value)">
+    </label>
+  </div>
+
+  <script>
+    function switchPage(pageId, btn) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('page-' + pageId).classList.add('active');
+      btn.classList.add('active');
+      document.getElementById('footer-page-tag').innerText = pageId.toUpperCase() + ' screen';
+    }
+
+    // Render 64 Driver Grids
+    function renderGrids() {
+      ['main-grid', 'manual-grid'].forEach(gridId => {
+        const grid = document.getElementById(gridId);
+        if (!grid) return;
+        grid.innerHTML = '';
+        for (let line = 1; line <= 4; line++) {
+          const row = document.createElement('div');
+          row.className = 'driver-row';
+          
+          const tag = document.createElement('div');
+          tag.className = 'row-tag';
+          tag.innerText = 'L' + line;
+          row.appendChild(tag);
+
+          for (let slave = 1; slave <= 16; slave++) {
+            const cell = document.createElement('div');
+            cell.className = 'axis-cell' + (line === 1 && slave === 1 ? ' selected' : '');
+            cell.innerText = `${line}.${slave}`;
+            row.appendChild(cell);
+          }
+          grid.appendChild(row);
+        }
+      });
+
+      // Render Status Table
+      const tbody = document.getElementById('status-table-body');
+      if (tbody) {
+        tbody.innerHTML = '';
+        for (let line = 1; line <= 4; line++) {
+          for (let slave = 1; slave <= 16; slave++) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><b>${line}.${slave}</b></td>
+              <td>Line ${line}</td>
+              <td>COM${line}</td>
+              <td><span style="color:var(--warning); font-weight:700">MOVING</span></td>
+              <td>${(Math.random() * 20).toFixed(3)}</td>
+              <td>${Math.floor(Math.random() * 1200 - 600)} rpm</td>
+              <td>AUTO_SINE</td>
+            `;
+            tbody.appendChild(tr);
+          }
+        }
+      }
+    }
+    renderGrids();
+
+    // Canvas Wave Animation
+    const canvas = document.getElementById('waveCanvas');
+    const ctx = canvas.getContext('2d');
+    let t = 0;
+
+    function drawWave() {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const count = 64;
+      const barWidth = canvas.width / count;
+      t += 0.04;
+
+      for (let i = 0; i < count; i++) {
+        let phase = (i / count) * Math.PI * 4 - t;
+        let val = 0.5 + 0.5 * Math.sin(phase);
+        let h = val * (canvas.height - 30);
+        let x = i * barWidth;
+        let y = canvas.height - h;
+
+        ctx.fillStyle = i < 21 ? '#1f84ff' : '#eca930';
+        ctx.fillRect(x + 1, y, barWidth - 2, h);
+      }
+      requestAnimationFrame(drawWave);
+    }
+    drawWave();
+
+    // Live Tweakers
+    function adjustLeftCol(val) {
+      document.getElementById('page-main').style.gridTemplateColumns = `${val}px 1fr 400px`;
+      document.getElementById('page-manual').style.gridTemplateColumns = `${val}px 1fr 400px`;
+    }
+    function adjustNavBtn(val) {
+      document.querySelectorAll('.nav-btn').forEach(b => b.style.width = val + 'px');
+    }
+    function adjustGridFont(val) {
+      document.querySelectorAll('.axis-cell').forEach(c => c.style.fontSize = val + 'pt');
+    }
+
+    // Live Clock
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('live-clock').innerHTML = 
+        now.toTimeString().split(' ')[0] + '<br>' + 
+        now.toLocaleDateString('vi-VN');
+    }, 1000);
+  </script>
+</body>
+</html>

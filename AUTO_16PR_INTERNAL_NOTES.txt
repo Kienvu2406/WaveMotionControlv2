@@ -1,0 +1,79 @@
+WAVE MOTION CONTROL - AUTO 16 PR INTERNAL (EXPERIMENTAL)
+========================================================
+
+Muc tieu
+--------
+Tao mot version AUTO khac de thu nghiem dung PR0..PR15 noi bo cua Leadshine EM2RS,
+khong dung scheduler PC de delay tung layer trong luc hieu ung dang chay.
+
+Nguyen ly version nay
+---------------------
+1. Tat ca driver trong cum phai Online va bat dau o pha 0 (HOME hoac Set Current Position = Origin).
+2. Phan mem tinh layer theo hieu ung:
+   - Song tu tam: vong chu nhat dong tam.
+   - Song tu dau -> cuoi: 4 huong trai/phai/tren/duoi.
+3. Thay vi doi thoi gian roi START tung layer, phan mem PRE-PHASE:
+   - Layer dau duoc dat san o pha dan.
+   - Layer cuoi o pha 0.
+   - Chenh pha giua 2 layer = LayerOffsetRevolutions.
+4. Sau khi tat ca driver dung dung pha, moi driver duoc nap du 16 PR:
+   - Position mode relative.
+   - 16 doan tong cong dung 1 vong PPR.
+   - Cung toc do RPM.
+   - OVLP = ON.
+   - PR0 -> PR1 -> ... -> PR15 -> PR0 bang JUMP.
+   - Pause = 0.
+5. START:
+   - Khong Task.Delay theo layer.
+   - 4 RS485 line START song song.
+   - Moi line gui FC06 0x6002=0x0010 theo burst, khong chen delay 15 ms giua cac ID.
+   - Sau do EM2RS tu chay loop PR0..PR15.
+
+Vi du 5 layer, lech 0.125 vong
+--------------------------------
+Pha khoi dong steady-state:
+Layer 0 = 0.500 vong
+Layer 1 = 0.375 vong
+Layer 2 = 0.250 vong
+Layer 3 = 0.125 vong
+Layer 4 = 0.000 vong
+
+Sau PRE-PHASE, tat ca motor cung bat dau quay mot chieu va giu chenh pha nay.
+
+Khac version delay PC
+---------------------
+Version cu:
+  Layer0 START -> delay -> Layer1 START -> delay -> ...
+
+Version nay:
+  PRE-PHASE tat ca driver -> nap 16 PR -> START tat ca theo burst -> EM2RS tu loop.
+
+Luu y quan trong
+----------------
+- Day la version THU NGHIEM de test tren hardware nho truoc (2x2 / 3x3).
+- PR chi ghi RAM, khong save EEPROM.
+- Hien tai 16 PR chia deu theo GOC MOTOR va cung RPM. Chua dung bang 16 PR bu slider-crank
+  cua MANUAL. Neu test timing/phase tot, co the nang cap planner AUTO sang 16 PR bu co khi sau.
+- PRE-PHASE se lam motor di chuyen truoc khi hieu ung chinh bat dau. UI se o trang thai STARTING
+  trong giai doan nay.
+- START van la unicast theo ID de khong broadcast nham driver ngoai cum. Vi vay van con skew nho
+  do RS485, nhung khong con delay layer do Windows scheduler.
+- Hay test o baud 115200 neu co the de giam skew START.
+- STOP khong HOME. Muon START lai tu pha chuan: HOME hoac lay vi tri hien tai lam goc theo quy trinh.
+
+File thay doi
+-------------
+WaveMotionControl/Services/Em2RsModbusService.cs
+WaveMotionControl/Services/DemoRs485Service.cs
+WaveMotionControl/UI/Pages/AutoPage.cs
+WaveMotionControl/UI/Controls/WavePreviewControl.cs
+WaveMotionControl/Models/AutoProgram.cs
+
+Tai lieu can cu
+--------------
+EM2RS Series User Manual V1.5:
+- PR Mode / 16 segment position table.
+- Pr9.00..Pr9.07 (0x6200..0x6207), cac PR tiep theo cach nhau 8 register.
+- JUMP, OVLP, relative position.
+- Immediate Trigger: ghi PR0 va 0x0010 vao Pr9.07.
+- Fixed trigger: 0x6002.

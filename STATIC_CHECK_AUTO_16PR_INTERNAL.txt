@@ -1,0 +1,21 @@
+STATIC CHECK - AUTO 16PR INTERNAL
+=================================
+
+Da kiem tra:
+- Can bang dau ngoac {} tren cac file C# thay doi.
+- #region / #endregion trong Em2RsModbusService.cs da can bang.
+- Khong con tham chieu StartDelaySeconds / AutoLoopAsync / PrepareConstantSpeedAutoLoopAsync.
+- AutoPage.cs co AutoPage_Load de tuong thich Designer cu.
+- AutoEffectType.WaveHeadToTail va 4 AutoWaveDirection van duoc giu.
+- AUTO preview da doi tu delay-layer sang phase-preposition steady-state.
+
+Chua kiem tra duoc:
+- dotnet build (moi truong hien tai khong co .NET SDK).
+- RS485 hardware / EM2RS that.
+
+Khuyen nghi test:
+1. Test 1 driver, LayerOffset=0: kiem tra PRE-PHASE bo qua va PR0..PR15 loop lien tuc.
+2. Test 2 driver, 2 layer, offset=0.125: driver layer dau pre-position 0.125 vong, driver sau = 0.
+3. Sau START, do chenh pha va kiem tra ca hai quay cung RPM.
+4. Test PAUSE/RESUME.
+5. Sau do moi tang len 2x2, 3x3 va 16 driver/line.
