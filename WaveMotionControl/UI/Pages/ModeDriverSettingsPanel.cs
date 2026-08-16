@@ -265,7 +265,7 @@ public sealed class ModeDriverSettingsPanel : UserControl
                 _pulsesPerRevolution.Maximum);
 
             SetStatus(
-                $"Đã đọc profile {address.DisplayId}. Giới hạn dòng tối đa 4.0 A.",
+                $"Đã đọc profile {address.DisplayId}. Giới hạn dòng tối đa 6.0 A.",
                 isError: false);
         });
     }
@@ -300,7 +300,7 @@ public sealed class ModeDriverSettingsPanel : UserControl
         new()
         {
             Minimum = 0.5M,
-            Maximum = 4.0M,
+            Maximum = 6.0M,
             Value = value,
             Increment = 0.1M,
             DecimalPlaces = 1,

@@ -77,7 +77,7 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
 
     private const int DefaultPulsesPerRevolution = 10_000;
     private const double MinimumPeakCurrentAmps = 0.5;
-    private const double MaximumPeakCurrentAmps = 4.0;
+    private const double MaximumPeakCurrentAmps = 6.0;
     private const int MaximumAutoUpdateIntervalMs = 120;
     private const int PollDelayMs = 250;
 
