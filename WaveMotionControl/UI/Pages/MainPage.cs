@@ -183,7 +183,7 @@ public partial class MainPage : UserControl
     private void RefreshSystemComPorts()
     {
         var realPorts = System.IO.Ports.SerialPort.GetPortNames().Distinct().OrderBy(p => p).ToArray();
-        var allPorts = realPorts.Length > 0 
+        var allPorts = realPorts.Length > 0
             ? realPorts.Concat(Enumerable.Range(1, 16).Select(i => $"COM{i}")).Distinct().ToArray()
             : Enumerable.Range(1, 32).Select(i => $"COM{i}").ToArray();
 
@@ -208,8 +208,8 @@ public partial class MainPage : UserControl
                 }
             }
         }
-        _state.WriteLog(LogLevel.Info, realPorts.Length > 0 
-            ? $"[Cổng COM Thật] Đã phát hiện {realPorts.Length} cổng COM phần cứng: {string.Join(", ", realPorts)}" 
+        _state.WriteLog(LogLevel.Info, realPorts.Length > 0
+            ? $"[Cổng COM Thật] Đã phát hiện {realPorts.Length} cổng COM phần cứng: {string.Join(", ", realPorts)}"
             : "[Cổng COM] Không tìm thấy thiết bị phần cứng cắm cổng COM. Đã nạp danh sách COM1..COM32 mặc định.");
     }
 
@@ -436,5 +436,10 @@ public partial class MainPage : UserControl
             if (found is not null) return found;
         }
         return null;
+    }
+
+    private void MainPage_Load(object sender, EventArgs e)
+    {
+
     }
 }

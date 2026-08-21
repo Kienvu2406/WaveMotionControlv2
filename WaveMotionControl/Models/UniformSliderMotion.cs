@@ -127,11 +127,11 @@ public static class UniformSliderMotionPlanner
         }
 
         if (!double.IsFinite(settings.PeakCurrentAmps) ||
-            settings.PeakCurrentAmps is < 0.5 or > 4.0)
+            settings.PeakCurrentAmps is < 0.5 or > 6.0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(settings),
-                "Dòng test 16 PR phải từ 0,5 A đến 4,0 A.");
+                "Dòng test 16 PR phải từ 0,5 A đến 6,0 A.");
         }
 
         if (pulsesPerRevolution is < 200 or > 51_200)

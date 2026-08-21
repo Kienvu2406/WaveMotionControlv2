@@ -403,7 +403,7 @@ public sealed class SettingPageFixed : UserControl
 
         grid.Controls.Add(SummaryCell("Phạm vi", _scopeValue), 0, 0);
         grid.Controls.Add(SummaryCell("Driver đọc", _driverValue), 1, 0);
-        grid.Controls.Add(SummaryCell("Giới hạn dòng", SummaryValue("4,0 A")), 0, 1);
+        grid.Controls.Add(SummaryCell("Giới hạn dòng", SummaryValue("6,0 A")), 0, 1);
         grid.Controls.Add(SummaryCell("EEPROM", _eepromValue), 1, 1);
         return grid;
     }
@@ -870,7 +870,7 @@ public sealed class SettingPageFixed : UserControl
     }
 
     private static NumericUpDown Current(decimal value) =>
-        Number(value, 0.5M, 4.0M, 0.1M, 1);
+        Number(value, 0.5M, 6.0M, 0.1M, 1);
 
     private static NumericUpDown Number(
         decimal value,

@@ -27,6 +27,7 @@ public partial class MainPage
         BackColor = Color.FromArgb(11, 15, 25);
         Name = "MainPage";
         Size = new Size(1357, 620);
+        Load += MainPage_Load;
         ResumeLayout(false);
     }
 }

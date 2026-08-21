@@ -119,7 +119,7 @@ public partial class ManualPage : UserControl
         _uniformRodLength = UiTheme.Numeric(100, 1, 2000, 0.1M, 1);
         _uniformOffset = UiTheme.Numeric(15, 0, 1000, 0.1M, 1);
         _uniformSliderSpeed = UiTheme.Numeric(20, 5, 1000, 1);
-        _uniformCurrent = UiTheme.Numeric(3.0M, 0.5M, 4.0M, 0.1M, 1);
+        _uniformCurrent = UiTheme.Numeric(3.0M, 0.5M, 6.0M, 0.1M, 1);
         _uniformAcceleration = UiTheme.Numeric(1000, 1, 10000, 10);
         _uniformDeceleration = UiTheme.Numeric(1000, 1, 10000, 10);
 
@@ -791,7 +791,7 @@ public partial class ManualPage : UserControl
         layout.Controls.Add(actions, 0, 4);
 
         var note = UiTheme.Label(
-            "Dòng test 16 PR được ghi vào 0x0191 khi START, giới hạn 0,5–4,0 A và không lưu EEPROM. " +
+            "Dòng test 16 PR được ghi vào 0x0191 khi START, giới hạn 0,5–6,0 A và không lưu EEPROM. " +
             "Gốc cơ khí phải đặt đúng điểm chết đã hiển thị; A-B-C thẳng hàng. " +
             "OVLP được bật, PR chỉ ghi RAM. Sau Quick Stop phải lấy gốc lại trước khi START.",
             UiTheme.FontSmall,
