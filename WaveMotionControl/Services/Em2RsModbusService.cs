@@ -1840,57 +1840,134 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
         }
     }
 
+    private static ushort[] BuildInternal16PrPathValues(
+        AutoAxisProfile profile,
+        int pathIndex)
+    {
+        const int segmentCount = 16;
+
+        if (pathIndex is < 0 or >= segmentCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pathIndex));
+        }
+
+        var basePulses = profile.PulsesPerRevolution / segmentCount;
+        var remainder = profile.PulsesPerRevolution % segmentCount;
+        var nextPath = (pathIndex + 1) % segmentCount;
+        var relativePulses = basePulses + (pathIndex < remainder ? 1 : 0);
+
+        if (relativePulses <= 0)
+        {
+            throw new InvalidOperationException(
+                $"AUTO {profile.Address.DisplayId}: PPR quá nhỏ để chia 16 PR.");
+        }
+
+        // Manual V1.5:
+        // TYPE=position, RELATIVE, OVLP, JUMP, bit8..13 = path kế tiếp.
+        var mode = (ushort)(
+            0x4000 |
+            ((nextPath & 0x3F) << 8) |
+            PrPathOverlapBit |
+            Pr0RelativeMode);
+
+        return new ushort[]
+        {
+            mode,
+            (ushort)((relativePulses >> 16) & 0xFFFF),
+            (ushort)(relativePulses & 0xFFFF),
+            profile.SpeedRpm,
+            profile.AccelerationTime,
+            profile.DecelerationTime,
+            0x0000, // Pause = 0, chuyển path liên tục
+            0x0000  // Không trigger khi đang ghi bảng
+        };
+    }
+
+    private static ushort[] BuildInternal16PrLoopWords(AutoAxisProfile profile)
+    {
+        const int segmentCount = 16;
+        const int wordsPerPath = 8;
+        var table = new ushort[segmentCount * wordsPerPath];
+
+        for (var pathIndex = 0; pathIndex < segmentCount; pathIndex++)
+        {
+            var pathValues = BuildInternal16PrPathValues(profile, pathIndex);
+            Array.Copy(
+                pathValues,
+                0,
+                table,
+                pathIndex * wordsPerPath,
+                wordsPerPath);
+        }
+
+        return table;
+    }
+
     private async Task WriteInternal16PrLoopAsync(
         AutoAxisProfile profile,
         CancellationToken cancellationToken)
     {
-        const int segmentCount = 16;
+        const int wordsPerPath = 8;
+        const int firstBulkPathCount = 15; // 15 * 8 = 120 words, nằm trong giới hạn FC10 <= 123.
         var slaveId = checked((byte)profile.Address.SlaveId);
-        var basePulses = profile.PulsesPerRevolution / segmentCount;
-        var remainder = profile.PulsesPerRevolution % segmentCount;
+        var table = BuildInternal16PrLoopWords(profile);
 
-        for (var pathIndex = 0; pathIndex < segmentCount; pathIndex++)
+        // TỐI ƯU:
+        // PR0..PR15 là 128 thanh ghi liên tiếp (0x6200..0x627F).
+        // Modbus FC10 chuẩn chỉ cho tối đa 123 register / frame, nên không thể
+        // gửi cả 128 word trong một frame. Thay vì 16 frame (mỗi PR một frame),
+        // ta gửi:
+        //   Frame 1: PR0..PR14 = 120 word
+        //   Frame 2: PR15       =   8 word
+        // => giảm 16 lệnh ghi xuống còn 2 lệnh ghi / driver.
+        //
+        // Một số firmware/adapter có thể không thích frame FC10 dài. Nếu bulk
+        // write thất bại, tự động fallback về cách cũ 16 frame để giữ tương thích.
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var firstChunk = new ushort[firstBulkPathCount * wordsPerPath];
+            var lastChunk = new ushort[wordsPerPath];
+            Array.Copy(table, 0, firstChunk, 0, firstChunk.Length);
+            Array.Copy(table, firstChunk.Length, lastChunk, 0, lastChunk.Length);
 
-            var nextPath = (pathIndex + 1) % segmentCount;
-            var relativePulses = basePulses + (pathIndex < remainder ? 1 : 0);
-            if (relativePulses <= 0)
-            {
-                throw new InvalidOperationException(
-                    $"AUTO {profile.Address.DisplayId}: PPR quá nhỏ để chia 16 PR.");
-            }
-
-            // Manual V1.5:
-            // TYPE=position, RELATIVE, OVLP, JUMP, bit8..13 = path kế tiếp.
-            var mode = (ushort)(
-                0x4000 |
-                ((nextPath & 0x3F) << 8) |
-                PrPathOverlapBit |
-                Pr0RelativeMode);
-
-            var values = new ushort[]
-            {
-                mode,
-                (ushort)((relativePulses >> 16) & 0xFFFF),
-                (ushort)(relativePulses & 0xFFFF),
-                profile.SpeedRpm,
-                profile.AccelerationTime,
-                profile.DecelerationTime,
-                0x0000, // Pause = 0, chuyển path liên tục
-                0x0000  // Không trigger khi đang ghi bảng
-            };
-
-            var startRegister = checked((ushort)(Pr0ModeRegister + pathIndex * 8));
             await WriteMultipleRegistersCheckedAsync(
                 profile.Address.Line,
                 slaveId,
-                startRegister,
-                values,
+                Pr0ModeRegister,
+                firstChunk,
+                cancellationToken).ConfigureAwait(false);
+
+            await WriteMultipleRegistersCheckedAsync(
+                profile.Address.Line,
+                slaveId,
+                checked((ushort)(Pr0ModeRegister + firstChunk.Length)),
+                lastChunk,
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _state.WriteLog(
+                LogLevel.Warning,
+                $"[AUTO 16PR BULK] {profile.Address.DisplayId}: bulk FC10 không thành công " +
+                $"({ex.Message}). Fallback 16 frame PR riêng.");
 
-        // Verify PR0 + PR15: phát hiện frame ghi thiếu/sai trước khi cho chạy thật.
+            for (var pathIndex = 0; pathIndex < 16; pathIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var values = BuildInternal16PrPathValues(profile, pathIndex);
+                var startRegister = checked((ushort)(Pr0ModeRegister + pathIndex * wordsPerPath));
+
+                await WriteMultipleRegistersCheckedAsync(
+                    profile.Address.Line,
+                    slaveId,
+                    startRegister,
+                    values,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // Verify PR0 + PR15: giữ kiểm tra đầu/cuối bảng trước khi START.
         await VerifyInternal16PrLoopAsync(profile, cancellationToken).ConfigureAwait(false);
 
         var axis = _state.GetAxis(profile.Address);
@@ -1900,53 +1977,113 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
 
         _state.WriteLog(
             LogLevel.Info,
-            $"[AUTO 16PR CONFIG] {profile.Address.DisplayId}: PR0..PR15, " +
-            $"PPR={profile.PulsesPerRevolution:N0}, Speed={profile.SpeedRpm} rpm, " +
-            $"PhaseStart={profile.PhaseOffsetRevolutions:0.###} vòng, OVLP=ON, JUMP loop, RAM only.");
+            $"[AUTO 16PR CONFIG FAST] {profile.Address.DisplayId}: PR0..PR15, " +
+            $"bulk 120+8 word, PPR={profile.PulsesPerRevolution:N0}, " +
+            $"Speed={profile.SpeedRpm} rpm, PhaseStart={profile.PhaseOffsetRevolutions:0.###} vòng.");
+    }
+
+    private async Task RestoreInternalPr0LoopEntryAsync(
+        AutoAxisProfile profile,
+        CancellationToken cancellationToken)
+    {
+        // LIDAR point-move chỉ ghi đè PR0 (0x6200..0x6207).
+        // PR1..PR15 của vòng 16PR vẫn còn nguyên trong RAM driver.
+        // Vì vậy sau khi re-phase chỉ cần khôi phục PR0, không nạp lại cả 16 PR.
+        var slaveId = checked((byte)profile.Address.SlaveId);
+        var pr0Values = BuildInternal16PrPathValues(profile, 0);
+
+        await WriteMultipleRegistersCheckedAsync(
+            profile.Address.Line,
+            slaveId,
+            Pr0ModeRegister,
+            pr0Values,
+            cancellationToken).ConfigureAwait(false);
+
+        await VerifyInternalPrPathAsync(
+            profile,
+            0,
+            cancellationToken).ConfigureAwait(false);
+
+        var axis = _state.GetAxis(profile.Address);
+        axis.VelocityRpm = 0;
+        axis.LastCommand = $"AUTO_PR0_RESTORED_C{profile.ClusterId}_L{profile.LayerIndex}";
+        axis.AlarmText = string.Empty;
+    }
+
+    private async Task RestoreInternalPr0ForProfilesAsync(
+        IReadOnlyCollection<AutoAxisProfile> profiles,
+        CancellationToken cancellationToken)
+    {
+        if (profiles.Count == 0)
+        {
+            return;
+        }
+
+        // Các RS485 line độc lập được xử lý song song.
+        // Trong mỗi line vẫn tuần tự theo Slave ID để không tranh chấp half-duplex.
+        await Task.WhenAll(
+            profiles
+                .GroupBy(profile => profile.Address.Line)
+                .Select(async lineProfiles =>
+                {
+                    foreach (var profile in lineProfiles.OrderBy(p => p.Address.SlaveId))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await RestoreInternalPr0LoopEntryAsync(
+                            profile,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                })).ConfigureAwait(false);
+    }
+
+    private async Task VerifyInternalPrPathAsync(
+        AutoAxisProfile profile,
+        int pathIndex,
+        CancellationToken cancellationToken)
+    {
+        var slaveId = checked((byte)profile.Address.SlaveId);
+        var expected = BuildInternal16PrPathValues(profile, pathIndex);
+        var startRegister = checked((ushort)(Pr0ModeRegister + pathIndex * 8));
+
+        // Word thứ 8 của PR0 map tới trigger register; chỉ verify 7 word cấu hình
+        // để tránh phụ thuộc trạng thái trigger đọc lại.
+        var readBack = await ReadRegistersCheckedAsync(
+            profile.Address.Line,
+            slaveId,
+            startRegister,
+            7,
+            cancellationToken).ConfigureAwait(false);
+
+        if (readBack.Length < 7)
+        {
+            throw new InvalidOperationException(
+                $"AUTO {profile.Address.DisplayId}: verify PR{pathIndex} thiếu dữ liệu.");
+        }
+
+        for (var index = 0; index < 7; index++)
+        {
+            if (readBack[index] != expected[index])
+            {
+                throw new InvalidOperationException(
+                    $"AUTO {profile.Address.DisplayId}: verify PR{pathIndex} không khớp " +
+                    $"word {index}: read=0x{readBack[index]:X4}, expected=0x{expected[index]:X4}.");
+            }
+        }
     }
 
     private async Task VerifyInternal16PrLoopAsync(
         AutoAxisProfile profile,
         CancellationToken cancellationToken)
     {
-        const int segmentCount = 16;
-        var slaveId = checked((byte)profile.Address.SlaveId);
-        var basePulses = profile.PulsesPerRevolution / segmentCount;
-        var remainder = profile.PulsesPerRevolution % segmentCount;
+        await VerifyInternalPrPathAsync(
+            profile,
+            0,
+            cancellationToken).ConfigureAwait(false);
 
-        foreach (var pathIndex in new[] { 0, 15 })
-        {
-            var nextPath = (pathIndex + 1) % segmentCount;
-            var relativePulses = basePulses + (pathIndex < remainder ? 1 : 0);
-            var expectedMode = (ushort)(
-                0x4000 |
-                ((nextPath & 0x3F) << 8) |
-                PrPathOverlapBit |
-                Pr0RelativeMode);
-            var expectedHigh = (ushort)((relativePulses >> 16) & 0xFFFF);
-            var expectedLow = (ushort)(relativePulses & 0xFFFF);
-
-            var startRegister = checked((ushort)(Pr0ModeRegister + pathIndex * 8));
-            var readBack = await ReadRegistersCheckedAsync(
-                profile.Address.Line,
-                slaveId,
-                startRegister,
-                7,
-                cancellationToken).ConfigureAwait(false);
-
-            if (readBack.Length < 7 ||
-                readBack[0] != expectedMode ||
-                readBack[1] != expectedHigh ||
-                readBack[2] != expectedLow ||
-                readBack[3] != profile.SpeedRpm ||
-                readBack[4] != profile.AccelerationTime ||
-                readBack[5] != profile.DecelerationTime ||
-                readBack[6] != 0)
-            {
-                throw new InvalidOperationException(
-                    $"AUTO {profile.Address.DisplayId}: verify PR{pathIndex} không khớp.");
-            }
-        }
+        await VerifyInternalPrPathAsync(
+            profile,
+            15,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task TriggerAutoProfilesAsync(
@@ -2129,15 +2266,12 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
                         token).ConfigureAwait(false);
 
                     // Tất cả driver đã đứng đúng phase cơ khí của profile sóng.
-                    // PR0 vừa được dùng cho point-move nên phải nạp lại đủ 16 PR,
-                    // sau đó trigger toàn cụm để tiếp tục quay cùng tốc độ và giữ
-                    // nguyên chênh lệch pha giữa các cột. Các motor cùng một cột
-                    // có cùng target phase nên sau bước này chúng tiếp tục đồng pha.
-                    foreach (var profile in profiles)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        await WriteInternal16PrLoopAsync(profile, token).ConfigureAwait(false);
-                    }
+                    // LIDAR point-move chỉ ghi đè PR0; PR1..PR15 vẫn còn nguyên.
+                    // Chỉ restore PR0 rồi START lại, đồng thời 2/4 RS485 line được
+                    // xử lý song song. Đây là phần tối ưu chính cho thời gian phản ứng.
+                    await RestoreInternalPr0ForProfilesAsync(
+                        profiles,
+                        token).ConfigureAwait(false);
 
                     await TriggerAutoProfilesAsync(profiles, token).ConfigureAwait(false);
 
@@ -2197,13 +2331,11 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
                         "RETURN RANDOM PHASE",
                         token).ConfigureAwait(false);
 
-                    // PR0 đã bị dùng cho point move LIDAR, vì vậy phải nạp lại đủ 16PR
-                    // trước khi khởi động nền RANDOM quay liên tục.
-                    foreach (var profile in profiles)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        await WriteInternal16PrLoopAsync(profile, token).ConfigureAwait(false);
-                    }
+                    // Các bước point-move/fade chỉ ghi đè PR0. PR1..PR15 vẫn còn nguyên,
+                    // nên chỉ restore PR0 trước khi khởi động lại nền RANDOM.
+                    await RestoreInternalPr0ForProfilesAsync(
+                        profiles,
+                        token).ConfigureAwait(false);
 
                     await TriggerAutoProfilesAsync(profiles, token).ConfigureAwait(false);
 
