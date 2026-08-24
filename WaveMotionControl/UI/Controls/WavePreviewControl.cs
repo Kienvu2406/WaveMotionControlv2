@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using WaveMotionControl.Models;
 
@@ -34,6 +34,10 @@ public class WavePreviewControl : Control
     [Browsable(false)]
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<AutoProgram?>? ProgramProvider { get; set; }
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<int, int?>? LidarZoneProvider { get; set; }
 
     [Browsable(false)]
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -113,7 +117,7 @@ public class WavePreviewControl : Control
                 {
                     var layer = layerMap.TryGetValue(driver, out var li) ? li : 0;
                     var maxLayerIndex = layers.Count == 0 ? 0 : layers.Max(x => x.Index);
-                    var phase = GetLayerPhase(cluster, layer, maxLayerIndex, _timeSeconds);
+                    var phase = GetDriverPhase(cluster, driver, layer, maxLayerIndex, _timeSeconds);
                     var normalized = phase >= 0 ? phase % 1.0 : 0;
                     var color = ColorFromPhase(normalized, layer);
                     using var brush = new SolidBrush(Color.FromArgb(190, color));
@@ -157,9 +161,33 @@ public class WavePreviewControl : Control
 
         var layers = cluster.BuildWaveLayers();
         var maxLayerIndex = layers.Count == 0 ? 0 : layers.Max(x => x.Index);
-        var phase = GetLayerPhase(cluster, layer.Index, maxLayerIndex, _timeSeconds);
+        var phase = GetDriverPhase(cluster, InspectAxis, layer.Index, maxLayerIndex, _timeSeconds);
         InspectPositionRevolutions = Math.Max(0, phase);
         InspectPhaseDegrees = ((phase * 360.0) % 360.0 + 360.0) % 360.0;
+    }
+
+    private double GetDriverPhase(
+        AutoCluster cluster,
+        AxisAddress driver,
+        int layerIndex,
+        int maxLayerIndex,
+        double timeSeconds)
+    {
+        if (cluster.Effect == AutoEffectType.Lidar)
+        {
+            var activeZone = LidarZoneProvider?.Invoke(cluster.Id);
+            if (activeZone is int zone)
+            {
+                var localColumn = cluster.GetLocalColumn(driver);
+                return cluster.GetLidarTargetRevolutions(zone, localColumn) +
+                       timeSeconds * Math.Max(0.0001, cluster.FrequencyHz);
+            }
+
+            return cluster.GetLidarRandomPhase(driver) +
+                   timeSeconds * Math.Max(0.0001, cluster.FrequencyHz);
+        }
+
+        return GetLayerPhase(cluster, layerIndex, maxLayerIndex, timeSeconds);
     }
 
     private static double GetLayerPhase(

@@ -1,13 +1,14 @@
 namespace WaveMotionControl.Models;
 
 /// <summary>
-/// AUTO mới: bản đồ 16x16, nhiều cụm độc lập và hiệu ứng theo lớp.
+/// AUTO: bản đồ 16x16, nhiều cụm độc lập và các hiệu ứng theo cụm.
 /// 1 vòng motor = 1 chu kỳ đi + về của con trượt.
 /// </summary>
 public enum AutoEffectType
 {
     WaveFromCenter,
-    WaveHeadToTail
+    WaveHeadToTail,
+    Lidar
 }
 
 public enum AutoWaveDirection
@@ -38,8 +39,12 @@ public sealed record AutoCluster(
     AutoEffectType Effect,
     AutoWaveDirection WaveDirection,
     double LayerOffsetRevolutions,
-    double FrequencyHz)
+    double FrequencyHz,
+    int LidarRandomSeed = 0)
 {
+    public const double LidarCenterTargetRevolutions = 0.500;
+    public const double LidarFalloffPerColumnRevolutions = 0.125;
+
     public double CenterRow => TopRow + (Height - 1) / 2.0;
     public double CenterColumn => LeftColumn + (Width - 1) / 2.0;
 
@@ -48,8 +53,59 @@ public sealed record AutoCluster(
         return Effect switch
         {
             AutoEffectType.WaveHeadToTail => BuildHeadToTailLayers(),
+            AutoEffectType.Lidar => BuildLidarColumnLayers(),
             _ => BuildCenterLayers()
         };
+    }
+
+    /// <summary>
+    /// LIDAR: 1 Zone tương ứng 1 cột của cụm.
+    /// Zone/column dùng zero-based ở tầng model.
+    /// </summary>
+    public double GetLidarTargetRevolutions(int activeZoneColumn, int localColumn)
+    {
+        var safeZone = Math.Clamp(activeZoneColumn, 0, Math.Max(0, Width - 1));
+        var safeColumn = Math.Clamp(localColumn, 0, Math.Max(0, Width - 1));
+        var distance = Math.Abs(safeColumn - safeZone);
+        return Math.Max(
+            0,
+            LidarCenterTargetRevolutions -
+            distance * LidarFalloffPerColumnRevolutions);
+    }
+
+    /// <summary>
+    /// Pha nền RANDOM của LIDAR. Giá trị ổn định theo seed + ô + Driver ID,
+    /// để toàn bộ motor cùng tốc độ nhưng có pha khởi đầu khác nhau.
+    /// </summary>
+    public double GetLidarRandomPhase(AxisAddress driver)
+    {
+        var cell = Cells.FirstOrDefault(c => c.DriverId == driver);
+        if (cell is null)
+        {
+            return 0;
+        }
+
+        unchecked
+        {
+            uint x = (uint)(LidarRandomSeed == 0 ? 0x51F15EED : LidarRandomSeed);
+            x ^= (uint)(cell.Row + 1) * 0x9E3779B9u;
+            x = (x << 13) | (x >> 19);
+            x ^= (uint)(cell.Column + 1) * 0x85EBCA6Bu;
+            x = (x << 11) | (x >> 21);
+            x ^= (uint)(driver.Line * 37 + driver.SlaveId * 101) * 0xC2B2AE35u;
+            x ^= x >> 16;
+            x *= 0x7FEB352Du;
+            x ^= x >> 15;
+
+            // Tránh đúng 0.000 để khi START nhìn thấy rõ các pha khác nhau.
+            return 0.02 + (x % 9600u) / 10000.0;
+        }
+    }
+
+    public int GetLocalColumn(AxisAddress driver)
+    {
+        var cell = Cells.FirstOrDefault(c => c.DriverId == driver);
+        return cell is null ? 0 : Math.Clamp(cell.Column - LeftColumn, 0, Math.Max(0, Width - 1));
     }
 
     private IReadOnlyList<AutoWaveLayer> BuildCenterLayers()
@@ -79,10 +135,6 @@ public sealed record AutoCluster(
     private IReadOnlyList<AutoWaveLayer> BuildHeadToTailLayers()
     {
         // Phương án A: cả một hàng hoặc một cột là một layer và chạy đồng thời.
-        // Trái -> Phải: mỗi cột là một layer.
-        // Phải -> Trái: thứ tự cột đảo lại.
-        // Trên -> Dưới: mỗi hàng là một layer.
-        // Dưới -> Trên: thứ tự hàng đảo lại.
         return Cells
             .Where(c => c.DriverId is not null)
             .Select(c =>
@@ -107,6 +159,20 @@ public sealed record AutoCluster(
                 g.Key,
                 g.Key,
                 g.Select(x => x.Cell.DriverId!.Value).Distinct().ToArray()))
+            .ToArray();
+    }
+
+    private IReadOnlyList<AutoWaveLayer> BuildLidarColumnLayers()
+    {
+        // LIDAR: mỗi cột chính là một Zone/layer logic.
+        return Cells
+            .Where(c => c.DriverId is not null)
+            .GroupBy(c => c.Column - LeftColumn)
+            .OrderBy(g => g.Key)
+            .Select(g => new AutoWaveLayer(
+                g.Key,
+                g.Key,
+                g.Select(c => c.DriverId!.Value).Distinct().ToArray()))
             .ToArray();
     }
 }

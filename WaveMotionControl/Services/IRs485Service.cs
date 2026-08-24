@@ -18,6 +18,7 @@ public interface IRs485Service
     Task StopAxisAsync(AxisAddress axis, CancellationToken cancellationToken = default);
     Task MoveRelativeRevolutionsAsync(AxisAddress axis, double signedRevolutions, int speedRpm, int pulsesPerRevolution, CancellationToken cancellationToken = default);
     Task StartAutoAsync(AutoProgram program, CancellationToken cancellationToken = default);
+    Task SetLidarZoneAsync(int clusterId, int? zeroBasedZoneColumn, CancellationToken cancellationToken = default);
     Task PauseAutoAsync(bool paused, CancellationToken cancellationToken = default);
     Task StopAllAsync(bool quickStop, CancellationToken cancellationToken = default);
 

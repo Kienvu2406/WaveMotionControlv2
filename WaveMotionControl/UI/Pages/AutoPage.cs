@@ -25,6 +25,9 @@ public partial class AutoPage : UserControl
     private readonly ComboBox _inspectAxis;
     private readonly ComboBox _effectCombo;
     private readonly ComboBox _waveDirectionCombo;
+    private readonly ComboBox _lidarZoneCombo;
+    private readonly Button _lidarEnterButton;
+    private readonly Button _lidarExitButton;
     private readonly Label _selectedCellLabel;
     private readonly Label _clusterInfo;
     private readonly Label _selectedClusterInfo;
@@ -44,6 +47,7 @@ public partial class AutoPage : UserControl
     private CancellationTokenSource? _autoStartCts;
     private Task? _autoStartTask;
     private bool _autoStopInProgress;
+    private readonly Dictionary<int, int?> _lidarActiveZones = new();
 
     private sealed class DesignerDependencies
     {
@@ -68,6 +72,7 @@ public partial class AutoPage : UserControl
         public AutoWaveDirection WaveDirection { get; set; } = AutoWaveDirection.LeftToRight;
         public double LayerOffsetRevolutions { get; set; } = 0.125;
         public double FrequencyHz { get; set; } = 0.20;
+        public int LidarRandomSeed { get; set; } = Random.Shared.Next(1, int.MaxValue);
         public Dictionary<(int Row, int Column), AxisAddress?> Drivers { get; } = new();
 
         public bool Contains(int row, int column) =>
@@ -106,6 +111,7 @@ public partial class AutoPage : UserControl
         _effectCombo = UiTheme.ComboBox();
         _effectCombo.Items.Add(new EffectItem(AutoEffectType.WaveFromCenter, "Sóng từ tâm — vòng chữ nhật"));
         _effectCombo.Items.Add(new EffectItem(AutoEffectType.WaveHeadToTail, "Sóng từ đầu → cuối"));
+        _effectCombo.Items.Add(new EffectItem(AutoEffectType.Lidar, "LIDAR — Random + phản ứng Zone"));
         _effectCombo.SelectedIndex = 0;
 
         _waveDirectionCombo = UiTheme.ComboBox();
@@ -115,6 +121,13 @@ public partial class AutoPage : UserControl
         _waveDirectionCombo.Items.Add(new DirectionItem(AutoWaveDirection.BottomToTop, "Dưới → Trên"));
         _waveDirectionCombo.SelectedIndex = 0;
         _waveDirectionCombo.Enabled = false;
+
+        _lidarZoneCombo = UiTheme.ComboBox();
+        _lidarZoneCombo.Enabled = false;
+        _lidarEnterButton = UiTheme.Button("TEST ZONE ENTER", primary: true);
+        _lidarExitButton = UiTheme.Button("TEST ZONE EXIT");
+        _lidarEnterButton.Enabled = false;
+        _lidarExitButton.Enabled = false;
 
         _selectedCellLabel = NewValueLabel("Chưa chọn ô");
         _clusterInfo = NewValueLabel("0 cụm");
@@ -265,7 +278,7 @@ public partial class AutoPage : UserControl
         {
             Dock = DockStyle.Top,
             AutoSize = false,
-            Height = 1100,
+            Height = 1220,
             ColumnCount = 1,
             RowCount = 6,
             Margin = Padding.Empty,
@@ -277,7 +290,7 @@ public partial class AutoPage : UserControl
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 125));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 330));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 450));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));
 
         var header = BuildHeader("AUTO — CỤM CHUYỂN ĐỘNG", "Grid 16×16 · nhiều cụm độc lập");
@@ -402,7 +415,7 @@ public partial class AutoPage : UserControl
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 8,
             BackColor = Color.Transparent,
             Margin = new Padding(0, 4, 0, 8),
             Padding = Padding.Empty,
@@ -413,6 +426,8 @@ public partial class AutoPage : UserControl
         effect.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
         effect.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         effect.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
+        effect.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        effect.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         effect.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var effectTitle = UiTheme.Label("HIỆU ỨNG CỤM", UiTheme.FontSection, UiTheme.Muted);
         effectTitle.Dock = DockStyle.Fill;
@@ -423,6 +438,26 @@ public partial class AutoPage : UserControl
         effect.Controls.Add(LabeledControl("Lệch lớp (vòng)", _layerOffset), 0, 3);
         effect.Controls.Add(LabeledControl("Tốc độ motor (vòng/s)", _frequency), 0, 4);
         effect.Controls.Add(ValueCard("Tốc độ tương đương", _speedInfo), 0, 5);
+        effect.Controls.Add(LabeledControl("Mô phỏng LIDAR: 1 Zone = 1 cột", _lidarZoneCombo), 0, 6);
+
+        var lidarTestButtons = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        lidarTestButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        lidarTestButtons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _lidarEnterButton.Dock = DockStyle.Fill;
+        _lidarExitButton.Dock = DockStyle.Fill;
+        _lidarEnterButton.Click += async (_, _) => await SimulateLidarZoneEnterAsync();
+        _lidarExitButton.Click += async (_, _) => await SimulateLidarZoneExitAsync();
+        lidarTestButtons.Controls.Add(_lidarEnterButton, 0, 0);
+        lidarTestButtons.Controls.Add(_lidarExitButton, 1, 0);
+        effect.Controls.Add(lidarTestButtons, 0, 7);
         layout.Controls.Add(effect, 0, 4);
 
         var help = UiTheme.Label(
@@ -432,7 +467,9 @@ public partial class AutoPage : UserControl
             "• Mỗi driver phải HOME hoặc đã lấy vị trí hiện tại làm gốc.\n" +
             "• Hiện tại motor quay đều một chiều; chưa bù tốc độ slider-crank.\n" +
             "• Sóng từ tâm: lan theo các vòng chữ nhật đồng tâm.\n" +
-            "• Sóng từ đầu → cuối: quét theo hàng/cột theo hướng đã chọn.\n\n" +
+            "• Sóng từ đầu → cuối: quét theo hàng/cột theo hướng đã chọn.\n" +
+            "• LIDAR: nền random cùng tốc độ/khác pha; Zone active re-phase cột tâm = 0,5 vòng, hai bên giảm dần rồi tiếp tục quay cùng tốc độ.\n" +
+            "• Hiện tại nút TEST Zone chỉ mô phỏng tín hiệu; CHƯA nối cảm biến LiDAR thật.\n\n" +
             "Pha 0 của HOME: con trượt ở phía trong.",
             UiTheme.FontSmall,
             UiTheme.Muted);
@@ -656,6 +693,7 @@ public partial class AutoPage : UserControl
                 _selectedClusterId = item.Id;
                 LoadSelectedClusterSettings();
                 RefreshGrid();
+                RefreshLidarSimulationControls();
             }
         };
         _effectCombo.SelectedIndexChanged += (_, _) =>
@@ -663,7 +701,12 @@ public partial class AutoPage : UserControl
             if (SelectedCluster() is { } c)
                 c.Effect = SelectedEffect();
 
-            _waveDirectionCombo.Enabled = SelectedEffect() == AutoEffectType.WaveHeadToTail;
+            var effect = SelectedEffect();
+            _waveDirectionCombo.Enabled = effect == AutoEffectType.WaveHeadToTail;
+            _layerOffset.Enabled = effect != AutoEffectType.Lidar;
+            if (SelectedCluster() is { } selected && effect == AutoEffectType.Lidar && selected.LidarRandomSeed == 0)
+                selected.LidarRandomSeed = Random.Shared.Next(1, int.MaxValue);
+            RefreshLidarSimulationControls();
             RefreshGrid();
         };
         _waveDirectionCombo.SelectedIndexChanged += (_, _) =>
@@ -689,6 +732,8 @@ public partial class AutoPage : UserControl
         _inspectAxis.SelectedIndexChanged += (_, _) => _preview.Invalidate();
         _state.StateChanged += (_, _) => BeginInvokeSafe(RefreshOnlineInfo);
         _preview.ProgramProvider = TryBuildProgram;
+        _preview.LidarZoneProvider = clusterId =>
+            _lidarActiveZones.TryGetValue(clusterId, out var zone) ? zone : null;
         _preview.InspectAxis = new AxisAddress(1, 1);
         var inspectTimer = new System.Windows.Forms.Timer { Interval = 100 };
         inspectTimer.Tick += (_, _) => UpdateInspectValue();
@@ -727,7 +772,8 @@ public partial class AutoPage : UserControl
             Effect = SelectedEffect(),
             WaveDirection = SelectedWaveDirection(),
             LayerOffsetRevolutions = (double)_layerOffset.Value,
-            FrequencyHz = (double)_frequency.Value
+            FrequencyHz = (double)_frequency.Value,
+            LidarRandomSeed = Random.Shared.Next(1, int.MaxValue)
         };
         foreach (var cell in draft.Cells()) draft.Drivers[cell] = null;
         _clusters.Add(draft);
@@ -871,12 +917,14 @@ public partial class AutoPage : UserControl
         SelectEffect(cluster.Effect);
         SelectWaveDirection(cluster.WaveDirection);
         _waveDirectionCombo.Enabled = cluster.Effect == AutoEffectType.WaveHeadToTail;
+        _layerOffset.Enabled = cluster.Effect != AutoEffectType.Lidar;
         _layerOffset.Value = (decimal)Math.Clamp(cluster.LayerOffsetRevolutions, (double)_layerOffset.Minimum, (double)_layerOffset.Maximum);
         _frequency.Value = (decimal)Math.Clamp(cluster.FrequencyHz, (double)_frequency.Minimum, (double)_frequency.Maximum);
         _clusterWidth.Value = cluster.Width;
         _clusterHeight.Value = cluster.Height;
         RefreshSpeedInfo();
         RefreshAutoReadiness();
+        RefreshLidarSimulationControls();
     }
 
     private void RefreshGrid()
@@ -904,12 +952,32 @@ public partial class AutoPage : UserControl
                 {
                     if (_preview.Running && layerMap.TryGetValue(a, out var layerIndex))
                     {
-                        var frequency = Math.Max(0.0001, cluster.FrequencyHz);
-                        var rawPhaseOffset =
-                            (maxLayerIndex - layerIndex) *
-                            Math.Max(0, cluster.LayerOffsetRevolutions);
-                        var phaseOffset = rawPhaseOffset % 1.0;
-                        var phase = phaseOffset + _preview.CurrentTimeSeconds * frequency;
+                        var modelCluster = ToAutoCluster(cluster);
+                        double phase;
+                        if (cluster.Effect == AutoEffectType.Lidar)
+                        {
+                            if (_lidarActiveZones.TryGetValue(cluster.Id, out var activeZone) && activeZone is int zone)
+                            {
+                                var localColumn = cell.Column - cluster.LeftColumn;
+                                phase = modelCluster.GetLidarTargetRevolutions(zone, localColumn) +
+                                        _preview.CurrentTimeSeconds * Math.Max(0.0001, cluster.FrequencyHz);
+                            }
+                            else
+                            {
+                                phase = modelCluster.GetLidarRandomPhase(a) +
+                                        _preview.CurrentTimeSeconds * Math.Max(0.0001, cluster.FrequencyHz);
+                            }
+                        }
+                        else
+                        {
+                            var frequency = Math.Max(0.0001, cluster.FrequencyHz);
+                            var rawPhaseOffset =
+                                (maxLayerIndex - layerIndex) *
+                                Math.Max(0, cluster.LayerOffsetRevolutions);
+                            var phaseOffset = rawPhaseOffset % 1.0;
+                            phase = phaseOffset + _preview.CurrentTimeSeconds * frequency;
+                        }
+
                         b.BackColor = Color.FromArgb(170, ColorFromHsv((float)((phase * 360.0 + layerIndex * 25.0) % 360.0), 0.72f, 0.92f));
                     }
                     b.Text = a.DisplayId;
@@ -1052,7 +1120,8 @@ public partial class AutoPage : UserControl
         c.Effect,
         c.WaveDirection,
         c.LayerOffsetRevolutions,
-        c.FrequencyHz);
+        c.FrequencyHz,
+        c.LidarRandomSeed);
 
     private void RebuildProgramData()
     {
@@ -1080,7 +1149,8 @@ public partial class AutoPage : UserControl
             c.Effect,
             c.WaveDirection,
             c.LayerOffsetRevolutions,
-            c.FrequencyHz)).ToArray();
+            c.FrequencyHz,
+            c.LidarRandomSeed)).ToArray();
 
         return new AutoProgram(16, 16, cells, clusters, GetConfiguredPpr(), (double)_frequency.Value, (double)_layerOffset.Value, (double)_rampUp.Value, (double)_rampDown.Value);
     }
@@ -1288,6 +1358,7 @@ public partial class AutoPage : UserControl
 
             _autoState.Text = "RUNNING";
             _autoState.ForeColor = UiTheme.Online;
+            RefreshLidarSimulationControls();
         }
         catch (OperationCanceledException)
             when (startCts.IsCancellationRequested)
@@ -1363,6 +1434,7 @@ public partial class AutoPage : UserControl
         _preview.Paused = _paused;
         _autoState.Text = _paused ? "PAUSED" : "RUNNING";
         await _service.PauseAutoAsync(_paused);
+        RefreshLidarSimulationControls();
     }
 
     private async Task StopAutoAsync(bool quick)
@@ -1427,8 +1499,8 @@ public partial class AutoPage : UserControl
 
             _autoRunning = false;
             _paused = false;
+            _lidarActiveZones.Clear();
 
-            
             await _service.StopAllAsync(quick);
 
             _autoState.Text =
@@ -1470,9 +1542,101 @@ public partial class AutoPage : UserControl
             _autoStopInProgress = false;
 
             RefreshAutoReadiness();
+            RefreshLidarSimulationControls();
         }
     }
 
+
+    private void RefreshLidarSimulationControls()
+    {
+        var cluster = SelectedCluster();
+        var isLidar = cluster is not null && cluster.Effect == AutoEffectType.Lidar;
+
+        var previous = _lidarZoneCombo.SelectedItem is LidarZoneItem item ? item.Index : 0;
+        _lidarZoneCombo.Items.Clear();
+        if (isLidar && cluster is not null)
+        {
+            for (var i = 0; i < cluster.Width; i++)
+                _lidarZoneCombo.Items.Add(new LidarZoneItem(i, $"Zone {i + 1} → Cột {i + 1}"));
+
+            if (_lidarZoneCombo.Items.Count > 0)
+                _lidarZoneCombo.SelectedIndex = Math.Clamp(previous, 0, _lidarZoneCombo.Items.Count - 1);
+        }
+
+        _lidarZoneCombo.Enabled = isLidar;
+        var canCommand = isLidar && _autoRunning && !_paused && !_autoStopInProgress;
+        _lidarEnterButton.Enabled = canCommand;
+        _lidarExitButton.Enabled = canCommand;
+    }
+
+    private async Task SimulateLidarZoneEnterAsync()
+    {
+        var cluster = SelectedCluster();
+        if (cluster is null || cluster.Effect != AutoEffectType.Lidar)
+            return;
+        if (!_autoRunning)
+        {
+            _state.WriteLog(LogLevel.Warning, "LIDAR TEST: hãy AUTO START trước.");
+            return;
+        }
+        if (_lidarZoneCombo.SelectedItem is not LidarZoneItem zone)
+            return;
+
+        try
+        {
+            _autoState.Text = $"LIDAR Z{zone.Index + 1}...";
+            _autoState.ForeColor = UiTheme.Accent;
+            await _service.SetLidarZoneAsync(cluster.Id, zone.Index);
+            _lidarActiveZones[cluster.Id] = zone.Index;
+            _autoState.Text = $"LIDAR Z{zone.Index + 1} ACTIVE";
+            _autoState.ForeColor = UiTheme.Online;
+            RefreshGrid();
+            _preview.Invalidate();
+        }
+        catch (OperationCanceledException)
+        {
+            // Zone mới hoặc STOP đã thay thế transition này.
+        }
+        catch (Exception ex)
+        {
+            _autoState.Text = "LIDAR ERROR";
+            _autoState.ForeColor = UiTheme.Error;
+            _state.WriteLog(LogLevel.Error, $"LIDAR TEST lỗi: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "LIDAR TEST", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async Task SimulateLidarZoneExitAsync()
+    {
+        var cluster = SelectedCluster();
+        if (cluster is null || cluster.Effect != AutoEffectType.Lidar)
+            return;
+        if (!_autoRunning)
+            return;
+
+        try
+        {
+            _autoState.Text = "LIDAR FADE...";
+            _autoState.ForeColor = UiTheme.Accent;
+            await _service.SetLidarZoneAsync(cluster.Id, null);
+            _lidarActiveZones[cluster.Id] = null;
+            _autoState.Text = "RUNNING · LIDAR RANDOM";
+            _autoState.ForeColor = UiTheme.Online;
+            RefreshGrid();
+            _preview.Invalidate();
+        }
+        catch (OperationCanceledException)
+        {
+            // Zone mới hoặc STOP đã thay thế transition này.
+        }
+        catch (Exception ex)
+        {
+            _autoState.Text = "LIDAR ERROR";
+            _autoState.ForeColor = UiTheme.Error;
+            _state.WriteLog(LogLevel.Error, $"LIDAR EXIT lỗi: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "LIDAR TEST", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
 
     private void UpdateInspectValue()
     {
@@ -1524,6 +1688,8 @@ public partial class AutoPage : UserControl
     {
         if (cluster.Effect == AutoEffectType.WaveFromCenter)
             return "Tâm";
+        if (cluster.Effect == AutoEffectType.Lidar)
+            return "LIDAR";
 
         var direction = cluster.WaveDirection switch
         {
@@ -1542,6 +1708,11 @@ public partial class AutoPage : UserControl
     }
 
     private sealed record DirectionItem(AutoWaveDirection Value, string Text)
+    {
+        public override string ToString() => Text;
+    }
+
+    private sealed record LidarZoneItem(int Index, string Text)
     {
         public override string ToString() => Text;
     }

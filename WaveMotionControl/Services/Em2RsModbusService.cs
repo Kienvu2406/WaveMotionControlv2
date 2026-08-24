@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
@@ -145,12 +145,19 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
     private List<AutoAxisProfile> _activeAutoProfiles = new();
     private readonly HashSet<AxisAddress> _activeAutoStartedAxes = new();
 
+    // LIDAR effect: chỉ một transition Zone được phép chạy tại một thời điểm.
+    // Command Zone mới sẽ cancel transition cũ để tâm sóng có thể đi theo người.
+    private readonly SemaphoreSlim _lidarTransitionLock = new(1, 1);
+    private CancellationTokenSource? _lidarTransitionCts;
+    private readonly Dictionary<int, int?> _activeLidarZones = new();
+
     private bool _disposed;
 
     private sealed record AutoAxisProfile(
         AxisAddress Address,
         int ClusterId,
         int LayerIndex,
+        int LocalColumn,
         double PhaseOffsetRevolutions,
         int PhaseOffsetPulses,
         ushort SpeedRpm,
@@ -1524,8 +1531,29 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
 
             var cluster = driverClusters[address];
             var layers = clusterLayers[cluster.Id];
-            var layer = layers.First(x => x.Drivers.Contains(address));
-            var maxLayerIndex = layers.Count == 0 ? 0 : layers.Max(x => x.Index);
+            var localColumn = cluster.GetLocalColumn(address);
+
+            var layerIndex = localColumn;
+            double phaseOffsetRevolutions;
+
+            if (cluster.Effect == AutoEffectType.Lidar)
+            {
+                // Nền LIDAR: tất cả motor cùng tốc độ, chỉ khác pha ban đầu.
+                phaseOffsetRevolutions = cluster.GetLidarRandomPhase(address);
+            }
+            else
+            {
+                var layer = layers.First(x => x.Drivers.Contains(address));
+                var maxLayerIndex = layers.Count == 0 ? 0 : layers.Max(x => x.Index);
+                layerIndex = layer.Index;
+
+                // Kiểu delay cũ: layer 0 đi trước, layer sau bị trễ N*offset vòng.
+                // Ở steady-state, chênh pha giữa hai layer liên tiếp vẫn là offset.
+                var rawPhase =
+                    (maxLayerIndex - layer.Index) *
+                    Math.Max(0, cluster.LayerOffsetRevolutions);
+                phaseOffsetRevolutions = PositiveModuloOne(rawPhase);
+            }
 
             var speedRps = Math.Clamp(cluster.FrequencyHz, 0.01, 5.0);
             var speedRpm = checked((ushort)Math.Clamp(
@@ -1549,13 +1577,6 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
 
             var pulsesPerRevolution = GetAxisPulsesPerRevolution(address);
 
-            // Kiểu delay cũ: layer 0 đi trước, layer sau bị trễ N*offset vòng.
-            // Ở steady-state, chênh pha giữa hai layer liên tiếp vẫn là offset.
-            // Ta đặt sẵn các phase để layer đầu dẫn, layer cuối = 0, rồi START cùng lượt.
-            var rawPhase =
-                (maxLayerIndex - layer.Index) *
-                Math.Max(0, cluster.LayerOffsetRevolutions);
-            var phaseOffsetRevolutions = PositiveModuloOne(rawPhase);
             var phaseOffsetPulses = (int)Math.Round(
                 phaseOffsetRevolutions * pulsesPerRevolution);
             phaseOffsetPulses %= pulsesPerRevolution;
@@ -1563,7 +1584,8 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
             profiles.Add(new AutoAxisProfile(
                 address,
                 cluster.Id,
-                layer.Index,
+                layerIndex,
+                localColumn,
                 phaseOffsetRevolutions,
                 phaseOffsetPulses,
                 speedRpm,
@@ -1609,6 +1631,11 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
             _activeAutoProgram = program;
             _activeAutoProfiles = profiles;
             _activeAutoStartedAxes.Clear();
+            _activeLidarZones.Clear();
+            foreach (var lidarCluster in program.Clusters.Where(c => c.Effect == AutoEffectType.Lidar))
+            {
+                _activeLidarZones[lidarCluster.Id] = null;
+            }
             _autoCts = cts;
             // Không còn scheduler layer. Task này chỉ giữ lifecycle AUTO cho tới STOP.
             _autoTask = Task.Delay(Timeout.Infinite, cts.Token);
@@ -1995,6 +2022,411 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
             })).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// LIDAR effect (chưa nối cảm biến thật): 1 Zone = 1 cột của cụm.
+    /// zeroBasedZoneColumn != null: re-phase sang profile sóng của Zone rồi
+    /// nạp lại 16PR để tiếp tục quay liên tục cùng tốc độ.
+    /// zeroBasedZoneColumn == null: tan sóng và trở về nền RANDOM 16PR.
+    ///
+    /// Các target LIDAR là phase cơ khí tuyệt đối theo HOME/Origin (0..0.5 vòng),
+    /// nhưng khi driver đã quay nhiều vòng ta chọn vị trí tương đương ở vòng kế tiếp
+    /// để motor luôn tiếp tục cùng một chiều, không quay ngược nhiều vòng về tọa độ 0.
+    /// </summary>
+    public async Task SetLidarZoneAsync(
+        int clusterId,
+        int? zeroBasedZoneColumn,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        AutoProgram program;
+        AutoCluster cluster;
+        AutoAxisProfile[] profiles;
+        CancellationToken autoToken;
+
+        lock (_autoSync)
+        {
+            program = _activeAutoProgram
+                ?? throw new InvalidOperationException("AUTO chưa chạy.");
+
+            cluster = program.Clusters.FirstOrDefault(c => c.Id == clusterId)
+                ?? throw new InvalidOperationException($"Không tìm thấy Cụm {clusterId} trong AUTO đang chạy.");
+
+            if (cluster.Effect != AutoEffectType.Lidar)
+            {
+                throw new InvalidOperationException($"Cụm {clusterId} không dùng hiệu ứng LIDAR.");
+            }
+
+            if (_autoPaused)
+            {
+                throw new InvalidOperationException("AUTO đang PAUSE. Hãy RESUME trước khi đổi Zone LIDAR.");
+            }
+
+            if (_autoCts is null)
+            {
+                throw new InvalidOperationException("AUTO lifecycle không còn hoạt động.");
+            }
+
+            autoToken = _autoCts.Token;
+            profiles = _activeAutoProfiles
+                .Where(p => p.ClusterId == clusterId)
+                .OrderBy(p => p.Address.Line)
+                .ThenBy(p => p.Address.SlaveId)
+                .ToArray();
+        }
+
+        if (profiles.Length == 0)
+        {
+            throw new InvalidOperationException($"Cụm {clusterId} không có driver LIDAR đang hoạt động.");
+        }
+
+        if (zeroBasedZoneColumn is int zone && (zone < 0 || zone >= cluster.Width))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(zeroBasedZoneColumn),
+                $"Zone LIDAR phải từ 1 đến {cluster.Width}.");
+        }
+
+        using var transitionCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            autoToken);
+
+        CancellationTokenSource? previousTransition;
+        lock (_autoSync)
+        {
+            previousTransition = _lidarTransitionCts;
+            _lidarTransitionCts = transitionCts;
+        }
+
+        // Người chuyển Zone nhanh: hủy chuyển động chuyển tiếp cũ và xử lý Zone mới nhất.
+        if (previousTransition is not null && !ReferenceEquals(previousTransition, transitionCts))
+        {
+            try { previousTransition.Cancel(); } catch { }
+        }
+
+        var token = transitionCts.Token;
+        await _lidarTransitionLock.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+
+            var pausedLines = await PausePollingForTargetsAsync(
+                profiles.Select(p => p.Address)).ConfigureAwait(false);
+
+            try
+            {
+                await QuickStopAutoProfilesAsync(profiles, token).ConfigureAwait(false);
+
+                if (zeroBasedZoneColumn is int activeZone)
+                {
+                    var targets = profiles.ToDictionary(
+                        profile => profile,
+                        profile => cluster.GetLidarTargetRevolutions(activeZone, profile.LocalColumn));
+
+                    await MoveLidarProfilesToMechanicalPhasesAsync(
+                        targets,
+                        $"ZONE {activeZone + 1}",
+                        token).ConfigureAwait(false);
+
+                    // Tất cả driver đã đứng đúng phase cơ khí của profile sóng.
+                    // PR0 vừa được dùng cho point-move nên phải nạp lại đủ 16 PR,
+                    // sau đó trigger toàn cụm để tiếp tục quay cùng tốc độ và giữ
+                    // nguyên chênh lệch pha giữa các cột. Các motor cùng một cột
+                    // có cùng target phase nên sau bước này chúng tiếp tục đồng pha.
+                    foreach (var profile in profiles)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        await WriteInternal16PrLoopAsync(profile, token).ConfigureAwait(false);
+                    }
+
+                    await TriggerAutoProfilesAsync(profiles, token).ConfigureAwait(false);
+
+                    foreach (var profile in profiles)
+                    {
+                        var axis = _state.GetAxis(profile.Address);
+                        axis.State = AxisMotionState.Moving;
+                        axis.VelocityRpm = profile.SpeedRpm;
+                        axis.LastCommand = $"LIDAR_WAVE_Z{activeZone + 1}_RUNNING";
+                        axis.AlarmText = string.Empty;
+                    }
+
+                    lock (_autoSync)
+                    {
+                        _activeLidarZones[clusterId] = activeZone;
+                    }
+
+                    _state.NotifyStateChanged();
+                    _state.WriteLog(
+                        LogLevel.Ok,
+                        $"[LIDAR TEST] Cụm {clusterId}: Zone {activeZone + 1} ACTIVE -> " +
+                        "re-phase xong, 16PR chạy liên tục. Cột tâm = 0.500 vòng; " +
+                        "hai bên giảm 0.125 vòng/cột.");
+                }
+                else
+                {
+                    int? previousZone;
+                    lock (_autoSync)
+                    {
+                        _activeLidarZones.TryGetValue(clusterId, out previousZone);
+                    }
+
+                    if (previousZone is int oldZone)
+                    {
+                        // Fade: giảm dần profile sóng trước khi trả lại các pha RANDOM.
+                        foreach (var scale in new[] { 0.66, 0.33 })
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var fadeTargets = profiles.ToDictionary(
+                                profile => profile,
+                                profile => cluster.GetLidarTargetRevolutions(oldZone, profile.LocalColumn) * scale);
+
+                            await MoveLidarProfilesToMechanicalPhasesAsync(
+                                fadeTargets,
+                                $"FADE {scale:0.00}",
+                                token).ConfigureAwait(false);
+                        }
+                    }
+
+                    // Trở về đúng các pha RANDOM đã tạo khi START AUTO.
+                    var randomTargets = profiles.ToDictionary(
+                        profile => profile,
+                        profile => PositiveModuloOne(profile.PhaseOffsetRevolutions));
+
+                    await MoveLidarProfilesToMechanicalPhasesAsync(
+                        randomTargets,
+                        "RETURN RANDOM PHASE",
+                        token).ConfigureAwait(false);
+
+                    // PR0 đã bị dùng cho point move LIDAR, vì vậy phải nạp lại đủ 16PR
+                    // trước khi khởi động nền RANDOM quay liên tục.
+                    foreach (var profile in profiles)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        await WriteInternal16PrLoopAsync(profile, token).ConfigureAwait(false);
+                    }
+
+                    await TriggerAutoProfilesAsync(profiles, token).ConfigureAwait(false);
+
+                    foreach (var profile in profiles)
+                    {
+                        var axis = _state.GetAxis(profile.Address);
+                        axis.State = AxisMotionState.Moving;
+                        axis.VelocityRpm = profile.SpeedRpm;
+                        axis.LastCommand = "LIDAR_RANDOM_RUNNING";
+                        axis.AlarmText = string.Empty;
+                    }
+
+                    lock (_autoSync)
+                    {
+                        _activeLidarZones[clusterId] = null;
+                    }
+
+                    _state.NotifyStateChanged();
+                    _state.WriteLog(
+                        LogLevel.Ok,
+                        $"[LIDAR TEST] Cụm {clusterId}: Zone EXIT -> fade xong, trở lại RANDOM 16PR.");
+                }
+            }
+            finally
+            {
+                ResumePollingLines(pausedLines);
+            }
+        }
+        finally
+        {
+            _lidarTransitionLock.Release();
+            lock (_autoSync)
+            {
+                if (ReferenceEquals(_lidarTransitionCts, transitionCts))
+                {
+                    _lidarTransitionCts = null;
+                }
+            }
+        }
+    }
+
+    private async Task QuickStopAutoProfilesAsync(
+        IReadOnlyCollection<AutoAxisProfile> profiles,
+        CancellationToken cancellationToken)
+    {
+        await Task.WhenAll(profiles
+            .GroupBy(profile => profile.Address.Line)
+            .Select(async group =>
+            {
+                foreach (var profile in group.OrderBy(p => p.Address.SlaveId))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await WriteRegisterCheckedAsync(
+                        profile.Address.Line,
+                        checked((byte)profile.Address.SlaveId),
+                        PrControlRegister,
+                        CommandQuickStop,
+                        cancellationToken).ConfigureAwait(false);
+                }
+            })).ConfigureAwait(false);
+    }
+
+    private async Task MoveLidarProfilesToMechanicalPhasesAsync(
+        IReadOnlyDictionary<AutoAxisProfile, double> phaseTargets,
+        string commandLabel,
+        CancellationToken cancellationToken)
+    {
+        if (phaseTargets.Count == 0)
+        {
+            return;
+        }
+
+        var absoluteTargets = new ConcurrentDictionary<AxisAddress, int>();
+
+        await Task.WhenAll(phaseTargets
+            .GroupBy(pair => pair.Key.Address.Line)
+            .Select(async lineGroup =>
+            {
+                foreach (var pair in lineGroup.OrderBy(x => x.Key.Address.SlaveId))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var profile = pair.Key;
+                    var phase = Math.Clamp(pair.Value, 0, 0.999999);
+                    var slaveId = checked((byte)profile.Address.SlaveId);
+
+                    await EnsureNoAlarmAsync(profile.Address, cancellationToken).ConfigureAwait(false);
+
+                    var positionWords = await ReadRegistersCheckedAsync(
+                        profile.Address.Line,
+                        slaveId,
+                        ActualPositionRegister,
+                        2,
+                        cancellationToken).ConfigureAwait(false);
+                    var actualPulses = CombineSigned32(positionWords[0], positionWords[1]);
+
+                    var phasePulses = (long)Math.Round(phase * profile.PulsesPerRevolution);
+                    phasePulses = Math.Clamp(phasePulses, 0, profile.PulsesPerRevolution - 1L);
+
+                    // Chọn cùng phase cơ khí ở vòng hiện tại / vòng kế tiếp.
+                    // Nếu target đã nằm phía sau thì cộng thêm 1 vòng để giữ chiều quay Forward.
+                    var cycle = (long)Math.Floor(actualPulses / (double)profile.PulsesPerRevolution);
+                    var targetLong = cycle * profile.PulsesPerRevolution + phasePulses;
+                    var tolerance = Math.Max(5, profile.PulsesPerRevolution / 1000);
+                    if (targetLong <= (long)actualPulses + tolerance)
+                    {
+                        targetLong += profile.PulsesPerRevolution;
+                    }
+
+                    if (targetLong > int.MaxValue || targetLong < int.MinValue)
+                    {
+                        throw new InvalidOperationException(
+                            $"LIDAR {profile.Address.DisplayId}: tọa độ tuyệt đối sắp vượt Int32. " +
+                            "Cần rebase tọa độ trước khi tiếp tục.");
+                    }
+
+                    var targetPulses = (int)targetLong;
+                    var values = BuildPr0Command(
+                        Pr0AbsoluteInterruptMode,
+                        targetPulses,
+                        profile.SpeedRpm,
+                        profile.AccelerationTime,
+                        profile.DecelerationTime);
+
+                    await WriteMultipleRegistersCheckedAsync(
+                        profile.Address.Line,
+                        slaveId,
+                        Pr0ModeRegister,
+                        values,
+                        cancellationToken).ConfigureAwait(false);
+
+                    absoluteTargets[profile.Address] = targetPulses;
+                    var axis = _state.GetAxis(profile.Address);
+                    axis.State = AxisMotionState.Moving;
+                    axis.VelocityRpm = profile.SpeedRpm;
+                    axis.LastCommand = $"LIDAR_{commandLabel}_{phase:0.###}REV";
+                }
+            })).ConfigureAwait(false);
+
+        _state.NotifyStateChanged();
+        await WaitForLidarAbsoluteTargetsAsync(
+            phaseTargets.Keys.ToArray(),
+            absoluteTargets,
+            cancellationToken).ConfigureAwait(false);
+
+        foreach (var pair in phaseTargets)
+        {
+            var axis = _state.GetAxis(pair.Key.Address);
+            axis.State = AxisMotionState.Moving; // AUTO vẫn active, dù đang giữ target.
+            axis.VelocityRpm = 0;
+            axis.LastCommand = $"LIDAR_HOLD_{commandLabel}_{pair.Value:0.###}REV";
+        }
+        _state.NotifyStateChanged();
+    }
+
+    private async Task WaitForLidarAbsoluteTargetsAsync(
+        IReadOnlyCollection<AutoAxisProfile> profiles,
+        IReadOnlyDictionary<AxisAddress, int> absoluteTargets,
+        CancellationToken cancellationToken)
+    {
+        var pending = profiles.ToDictionary(p => p.Address, p => p);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(125);
+
+        while (pending.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var pair in pending.ToArray())
+            {
+                var profile = pair.Value;
+                var slaveId = checked((byte)profile.Address.SlaveId);
+                var status = await ReadRegisterCheckedAsync(
+                    profile.Address.Line,
+                    slaveId,
+                    MotionStatusRegister,
+                    cancellationToken).ConfigureAwait(false);
+                var alarm = await ReadRegisterCheckedAsync(
+                    profile.Address.Line,
+                    slaveId,
+                    AlarmRegister,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (alarm != 0 || (status & 0x0001) != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"LIDAR {profile.Address.DisplayId} báo lỗi: {DescribeAlarm(alarm)}.");
+                }
+
+                var positionWords = await ReadRegistersCheckedAsync(
+                    profile.Address.Line,
+                    slaveId,
+                    ActualPositionRegister,
+                    2,
+                    cancellationToken).ConfigureAwait(false);
+                var actualPulses = CombineSigned32(positionWords[0], positionWords[1]);
+                var target = absoluteTargets[profile.Address];
+                var running = (status & 0x0004) != 0;
+                var tolerance = Math.Max(5, profile.PulsesPerRevolution / 1000);
+
+                if (!running && Math.Abs((long)actualPulses - target) <= tolerance)
+                {
+                    pending.Remove(pair.Key);
+                    var axis = _state.GetAxis(profile.Address);
+                    axis.PositionRevolutions = actualPulses / (double)profile.PulsesPerRevolution;
+                    axis.VelocityRpm = 0;
+                }
+            }
+
+            if (pending.Count == 0)
+            {
+                break;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    "LIDAR timeout khi chờ motor tới target: " +
+                    string.Join(", ", pending.Keys.Select(a => a.DisplayId)) + ".");
+            }
+
+            await Task.Delay(40, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     public async Task PauseAutoAsync(bool paused, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -2082,6 +2514,7 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
             _activeAutoProgram = null;
             _activeAutoProfiles.Clear();
             _activeAutoStartedAxes.Clear();
+            _activeLidarZones.Clear();
         }
 
         _state.NotifyStateChanged();
@@ -4579,15 +5012,23 @@ public sealed class Em2RsModbusService : IRs485Service, IModeDriverSettingsServi
     private async Task CancelAutoWorkerAsync()
     {
         CancellationTokenSource? cts;
+        CancellationTokenSource? lidarTransition;
         Task? task;
 
         lock (_autoSync)
         {
             cts = _autoCts;
             task = _autoTask;
+            lidarTransition = _lidarTransitionCts;
             _autoCts = null;
             _autoTask = null;
+            _lidarTransitionCts = null;
             _autoPaused = false;
+        }
+
+        if (lidarTransition is not null)
+        {
+            try { lidarTransition.Cancel(); } catch { }
         }
 
         if (cts is null)
