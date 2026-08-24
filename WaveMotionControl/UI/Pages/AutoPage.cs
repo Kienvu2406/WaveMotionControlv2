@@ -48,6 +48,7 @@ public partial class AutoPage : UserControl
     private Task? _autoStartTask;
     private bool _autoStopInProgress;
     private readonly Dictionary<int, int?> _lidarActiveZones = new();
+    private readonly Dictionary<int, CancellationTokenSource> _lidarUiWindowCts = new();
 
     private sealed class DesignerDependencies
     {
@@ -741,7 +742,12 @@ public partial class AutoPage : UserControl
         var gridTimer = new System.Windows.Forms.Timer { Interval = 250 };
         gridTimer.Tick += (_, _) => RefreshGrid();
         gridTimer.Start();
-        Disposed += (_, _) => { inspectTimer.Dispose(); gridTimer.Dispose(); };
+        Disposed += (_, _) =>
+        {
+            CancelLidarUiWindowTimers();
+            inspectTimer.Dispose();
+            gridTimer.Dispose();
+        };
     }
 
     private void PopulateInspectAxes()
@@ -1499,6 +1505,7 @@ public partial class AutoPage : UserControl
 
             _autoRunning = false;
             _paused = false;
+            CancelLidarUiWindowTimers();
             _lidarActiveZones.Clear();
 
             await _service.StopAllAsync(quick);
@@ -1565,8 +1572,12 @@ public partial class AutoPage : UserControl
 
         _lidarZoneCombo.Enabled = isLidar;
         var canCommand = isLidar && _autoRunning && !_paused && !_autoStopInProgress;
-        _lidarEnterButton.Enabled = canCommand;
-        _lidarExitButton.Enabled = canCommand;
+        var waveLocked = cluster is not null &&
+                         _lidarActiveZones.TryGetValue(cluster.Id, out var activeZone) &&
+                         activeZone is int;
+        _lidarEnterButton.Enabled = canCommand && !waveLocked;
+        // Hiệu ứng mới khóa tâm trong đủ 60 giây; EXIT thủ công không cắt ngang wave.
+        _lidarExitButton.Enabled = canCommand && !waveLocked;
     }
 
     private async Task SimulateLidarZoneEnterAsync()
@@ -1582,20 +1593,29 @@ public partial class AutoPage : UserControl
         if (_lidarZoneCombo.SelectedItem is not LidarZoneItem zone)
             return;
 
+        if (_lidarActiveZones.TryGetValue(cluster.Id, out var locked) && locked is int lockedZone)
+        {
+            _state.WriteLog(LogLevel.Info,
+                $"LIDAR TEST: Cụm {cluster.Id} đang khóa Zone {lockedZone + 1} trong 60 giây; bỏ qua Zone mới.");
+            return;
+        }
+
         try
         {
-            _autoState.Text = $"LIDAR Z{zone.Index + 1}...";
+            _autoState.Text = $"LIDAR Z{zone.Index + 1} · PHASE 2X...";
             _autoState.ForeColor = UiTheme.Accent;
             await _service.SetLidarZoneAsync(cluster.Id, zone.Index);
             _lidarActiveZones[cluster.Id] = zone.Index;
-            _autoState.Text = $"LIDAR Z{zone.Index + 1} ACTIVE";
+            _autoState.Text = $"LIDAR Z{zone.Index + 1} · WAVE 60s";
             _autoState.ForeColor = UiTheme.Online;
+            RefreshLidarSimulationControls();
             RefreshGrid();
             _preview.Invalidate();
+            StartLidarUiWindowTimer(cluster.Id, zone.Index);
         }
         catch (OperationCanceledException)
         {
-            // Zone mới hoặc STOP đã thay thế transition này.
+            // STOP đã hủy transition.
         }
         catch (Exception ex)
         {
@@ -1614,12 +1634,16 @@ public partial class AutoPage : UserControl
         if (!_autoRunning)
             return;
 
+        if (_lidarActiveZones.TryGetValue(cluster.Id, out var activeZone) && activeZone is int zone)
+        {
+            _state.WriteLog(LogLevel.Info,
+                $"LIDAR TEST: Zone {zone + 1} đang khóa trong cửa sổ 60 giây; EXIT thủ công bị bỏ qua.");
+            return;
+        }
+
         try
         {
-            _autoState.Text = "LIDAR FADE...";
-            _autoState.ForeColor = UiTheme.Accent;
             await _service.SetLidarZoneAsync(cluster.Id, null);
-            _lidarActiveZones[cluster.Id] = null;
             _autoState.Text = "RUNNING · LIDAR RANDOM";
             _autoState.ForeColor = UiTheme.Online;
             RefreshGrid();
@@ -1627,7 +1651,7 @@ public partial class AutoPage : UserControl
         }
         catch (OperationCanceledException)
         {
-            // Zone mới hoặc STOP đã thay thế transition này.
+            // STOP đã hủy transition.
         }
         catch (Exception ex)
         {
@@ -1636,6 +1660,64 @@ public partial class AutoPage : UserControl
             _state.WriteLog(LogLevel.Error, $"LIDAR EXIT lỗi: {ex.Message}");
             MessageBox.Show(this, ex.Message, "LIDAR TEST", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void StartLidarUiWindowTimer(int clusterId, int zoneIndex)
+    {
+        if (_lidarUiWindowCts.Remove(clusterId, out var oldCts))
+        {
+            try { oldCts.Cancel(); } catch { }
+            oldCts.Dispose();
+        }
+
+        var cts = new CancellationTokenSource();
+        _lidarUiWindowCts[clusterId] = cts;
+        _ = CompleteLidarUiWindowAsync(clusterId, zoneIndex, cts);
+    }
+
+    private async Task CompleteLidarUiWindowAsync(
+        int clusterId,
+        int zoneIndex,
+        CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(60), cts.Token);
+            if (cts.IsCancellationRequested || !_autoRunning)
+                return;
+
+            if (_lidarActiveZones.TryGetValue(clusterId, out var activeZone) && activeZone == zoneIndex)
+            {
+                _lidarActiveZones[clusterId] = null;
+                _autoState.Text = "LIDAR 60s DONE · RETURN RANDOM";
+                _autoState.ForeColor = UiTheme.Accent;
+                RefreshLidarSimulationControls();
+                RefreshGrid();
+                _preview.Invalidate();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // STOP hoặc wave mới đã thay timer UI.
+        }
+        finally
+        {
+            if (_lidarUiWindowCts.TryGetValue(clusterId, out var current) && ReferenceEquals(current, cts))
+            {
+                _lidarUiWindowCts.Remove(clusterId);
+            }
+            cts.Dispose();
+        }
+    }
+
+    private void CancelLidarUiWindowTimers()
+    {
+        foreach (var cts in _lidarUiWindowCts.Values.ToArray())
+        {
+            try { cts.Cancel(); } catch { }
+            cts.Dispose();
+        }
+        _lidarUiWindowCts.Clear();
     }
 
     private void UpdateInspectValue()
